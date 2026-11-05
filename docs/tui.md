@@ -13,7 +13,7 @@ Ink (React without JSX: `const h = React.createElement`). Shell in `src/tui/app.
 - `App`'s `useInput` handles **global keys first**, then screens get the rest. Only five are single keys: `?` help,
   `q` quit, `m` map, `u` refresh, `g` go-to. Everything else is `g` + a key from `GOTO` (`overlays.ts`, shared by
   the nav bar, the help and the handler): `h` home · `j` jobs · `m` map · `i` character · `t` town · `q` quests ·
-  `r` mail · `b` trade · `d` duels · `c` chat · `a` autopilot · `x` debug, plus `s` sleep · `p` places · `L` live ·
+  `r` mail · `b` trade · `d` duels · `c` chat · `e` events · `a` autopilot · `x` debug, plus `s` sleep · `p` places · `L` live ·
   `R` reload · `A` account. While `g` is pending the nav bar shows "go to ›" and the key line lists the actions.
   Keep it that way: new screens and rare actions go under `g`, so screens keep the letters.
 - **Esc is back**, one step: overlay → panel / detail focus → previous screen. `App` keeps a history (`go(m)` /
@@ -62,6 +62,15 @@ Ink (React without JSX: `const h = React.createElement`). Shell in `src/tui/app.
   progress bars, and construction detail. `Enter` opens a form with the available duration and payer (town
   treasury / private), then queues a `taskType: 'build'` task. `u` refreshes; it does not use the town you are
   standing in.
+- **Events** (`events.ts`, mode `events`, `g e`): tabs (`← →`/`Tab`) **Event** · **Loteria** · **Log**. Event:
+  each running seasonal event's counter, bar to the next milestone and the milestone list (`✓` reached, `›` next),
+  friends who can get a gift now and when the next can, the autopilot's gift status, community event stages and
+  the Loteria's free games; `s` sends to all eligible friends (confirm `y`). Loteria: stages, status, the
+  current reward and each stage's pool; `s` starts (free at once, paid asks for a currency by digit), `1 2 3` pick
+  a card, `n` next stage and `c` collect (confirm `y`), `b` bribe and `r` reroll (currency prompt). Opening the tab
+  only reads the game. Log: the currency log, `< >` pages. `u` refreshes friends, Loteria and log. The header shows
+  `❀ <collected> → <next milestone>` and "Loteria free" while one is waiting.
+- **Help overlay**: when it is taller than the terminal the lists clip at the bottom; the title stays.
 - **Log pane** (bottom, all screens): 3 lines, 5 from 32 rows; twice that on home and jobs. Logged: finished
   tasks, each new report once (`reportLogLine`: job XP, $, event currency, found items; others by title; ids in
   `seenReports`), item uses (manual and autopilot), level-ups, autopilot actions, errors.

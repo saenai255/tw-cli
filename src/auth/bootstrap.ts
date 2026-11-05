@@ -56,7 +56,11 @@ export interface Bootstrap {
   premium: JsonObject | null;
   /** Bag.init({bag, wear, setItems, itemCooldown, itemLifetime}) */
   bag: JsonObject | null;
+  /** west.wof.WofManager.init([{id, type, name, title, free, endDate}]): event wheels (game/events.ts). */
+  wheels: unknown[];
 }
+
+const arrayOrEmpty = (value: unknown): unknown[] => (Array.isArray(value) ? value : []);
 
 export class BootstrapError extends Error {}
 
@@ -77,5 +81,6 @@ export function parseBootstrap(html: string): Bootstrap {
     character: readInit('Character.init'),
     premium: readInit('Premium.init'),
     bag: readInit('Bag.init'),
+    wheels: arrayOrEmpty(extractInitArg(html, 'WofManager.init')),
   };
 }

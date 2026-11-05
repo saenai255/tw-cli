@@ -38,6 +38,8 @@ const JOBS_REFRESH_MS = 30 * 60_000;
 /** Quest shopping: at most this many towns' shops are read (nearest first), one request at a time this far apart. */
 const SHOP_TOWNS = 10;
 const BUY_SCAN_GAP_MS = 3_000;
+/** Event gifts: the friends list is re-read this often to see whose cooldown is over. */
+const GIFT_CHECK_MS = 10 * 60_000;
 
 export class AutopilotRunner {
   plan: Plan | null = null;
@@ -62,6 +64,7 @@ export class AutopilotRunner {
   private replanReason: string | null = null;
   private scanning = false;
   private scanAt = 0;
+  private giftsAt = 0;
 
   private quests: QuestModule;
 
@@ -587,6 +590,9 @@ export class AutopilotRunner {
       if (await this.maybeCancelForBetter()) {
         return;
       }
+      if (this.config.modules.eventGifts && (await this.sendEventGifts())) {
+        return;
+      }
       if (this.config.modules.quests && (await this.quests.step())) {
         return;
       }
@@ -597,6 +603,53 @@ export class AutopilotRunner {
     } finally {
       this.acting = false;
     }
+  }
+
+  /**
+   * Seasonal event gifts: every GIFT_CHECK_MS re-reads the friends list and, when any friend's cooldown for a
+   * running event is over, sends to all eligible friends at once (friendsbar/event_all, like the browser's
+   * double click). Failures back off like any step (`gift:<event>`).
+   */
+  private async sendEventGifts(): Promise<boolean> {
+    const gameState = this.state;
+    if (Date.now() - this.giftsAt < GIFT_CHECK_MS) {
+      return false;
+    }
+    const skipped = this.skipped();
+    const events = gameState.events
+      .running(gameState.clock.now())
+      .filter((event) => event.gift && !skipped.has(`gift:${event.id}`));
+    if (!events.length || skipped.has('gift:friends')) {
+      return false;
+    }
+    this.giftsAt = Date.now();
+    try {
+      await gameState.autopilotLoadFriends();
+    } catch (err) {
+      this.fail('gift:friends', `friends list for event gifts: ${errorMessage(err)}`);
+      return false;
+    }
+    for (const { event, friends } of gameState.events.giftsDue(gameState.clock.now())) {
+      if (skipped.has(`gift:${event.id}`)) {
+        continue;
+      }
+      gameState.debug.add('autopilot', `Event gifts ${event.id}: ${friends.length} friend(s) due`, {
+        event: event.id,
+        cooldown: event.gift?.cooldown,
+        due: friends.map((friend) => friend.name),
+        friends: gameState.events.friends?.length ?? 0,
+      });
+      if (!friends.length) {
+        continue;
+      }
+      try {
+        await gameState.sendEventGifts(event.id, 'autopilot');
+      } catch (err) {
+        this.fail(`gift:${event.id}`, `${event.id} gifts: ${errorMessage(err)}`);
+      }
+      return true;
+    }
+    return false;
   }
 
   /**

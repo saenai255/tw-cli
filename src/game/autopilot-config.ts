@@ -15,7 +15,16 @@ export const GOALS: Goal[] = ['quests', 'xp', 'money', 'products'];
 /** Weights by rank: the top goal decides, the rest break ties. */
 export const RANK_WEIGHTS = [1, 0.25, 0.06, 0.015];
 
-export type ModuleKey = 'jobs' | 'energySleep' | 'hpSleep' | 'consumables' | 'bank' | 'quests' | 'npcDuels' | 'dryRun';
+export type ModuleKey =
+  | 'jobs'
+  | 'energySleep'
+  | 'hpSleep'
+  | 'consumables'
+  | 'bank'
+  | 'quests'
+  | 'npcDuels'
+  | 'eventGifts'
+  | 'dryRun';
 
 export interface AutopilotConfig {
   running: boolean;
@@ -72,6 +81,7 @@ export const DEFAULT_CONFIG: AutopilotConfig = {
     bank: true,
     quests: false,
     npcDuels: false,
+    eventGifts: true,
     dryRun: false,
   },
   wake: { levelUp: true, stretch: false, hpSafe: true, full: false },

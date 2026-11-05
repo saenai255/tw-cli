@@ -13,6 +13,7 @@ export const ICON = {
   duel: '⚔',
   quest: '!',
   mail: '✉',
+  event: '❀',
   done: '✓',
   fail: '✘',
   action: '•',

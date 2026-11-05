@@ -55,6 +55,7 @@ In the TUI, press `?` for help on any screen. Keys are vim-like: `Esc` always go
 | `g b`         | trade: bank, shops, mobile trader, market, buy orders                             |
 | `g d`         | duels: NPCs & players                                                             |
 | `g c`         | full chat with whispers (`g L` turns live updates on)                             |
+| `g e`         | events: seasonal currency & rewards, gifts to friends, Loteria, community event   |
 | `g a`         | autopilot                                                                         |
 | `g x`         | debug log: everything the client and autopilot did, with the data                 |
 | `g s` · `g p` | sleep in a hotel · points of interest                                             |
@@ -76,6 +77,8 @@ part is a toggle with safe defaults, and the plan pane says what it will do next
   trader, or on the market (instant buy, then a trip to collect). It counts walking against price, keeps to
   $3,000 per quest in shops ($5,000 on the market) and to the daily spend cap.
 - **NPC duels** for XP when the record says they are won and beat the best job (never players).
+- **Event gifts**: during a seasonal event (Day of the Dead, …) it sends your daily event currency to all
+  friends who can get it again. The Loteria card game is announced but left to you (`g e`).
 - Cancels queued tasks when a fresh plan is clearly better, retries failures with backoff, and learns drop rates,
   HP loss, motivation and hotel rates from your own reports.
 

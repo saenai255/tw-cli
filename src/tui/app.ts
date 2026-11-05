@@ -3,6 +3,7 @@
 
 import { Box, render, Text, useApp, useInput, useWindowSize } from 'ink';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { nextMilestone } from '../game/events.ts';
 import { defaultRoom } from '../game/hotel.ts';
 import { DURATION_KEYS, type DurationKey } from '../game/jobs.ts';
 import { poisNear } from '../game/poi.ts';
@@ -13,6 +14,7 @@ import { CharacterScreen } from './character.ts';
 import { ChatScreen } from './chat.ts';
 import { DebugScreen } from './debug.ts';
 import { DuelsScreen } from './duels.ts';
+import { EventsScreen } from './events.ts';
 import { bar, formatDuration, money, scrollWindow, truncate } from './format.ts';
 import { HomeScreen } from './home.ts';
 import { ICON } from './icons.ts';
@@ -91,6 +93,7 @@ function Header({ state }: { state: GameState }) {
           ? createElement(Text, { color: 'magenta' }, ` · auto-route ${state.autoRoute.runs.length} left`)
           : '',
         state.autopilot.config.running ? createElement(Text, { color: 'green' }, ' · autopilot ●') : '',
+        eventText(state),
         state.busy ? ' · working…' : '',
       ),
     ),
@@ -114,6 +117,25 @@ function Header({ state }: { state: GameState }) {
           )
         : '',
     ),
+  );
+}
+
+/** Header: the running seasonal event's counter and next reward, and a free Loteria game (g e). */
+function eventText(state: GameState): React.ReactNode {
+  const now = state.clock.now();
+  const event = state.events.running(now)[0];
+  const wheel = state.events.cardGameWheel(now);
+  if (!event && !wheel?.free) {
+    return '';
+  }
+  const next = event ? nextMilestone(event) : null;
+  return createElement(
+    Text,
+    { color: 'magenta' },
+    event
+      ? ` · ${ICON.event} ${event.collected.toLocaleString('en')}${next ? ` → ${next.at.toLocaleString('en')}` : ''}`
+      : '',
+    wheel?.free ? ` · Loteria free (g e)` : '',
   );
 }
 
@@ -162,6 +184,9 @@ function helpFor(context: {
   }
   if (context.mode === 'town') {
     return '↑↓ building · Enter construction · u refresh · Esc back · ? help';
+  }
+  if (context.mode === 'events') {
+    return '← → event / Loteria / log · s send to friends · u refresh · Esc back · ? help';
   }
   if (context.mode === 'home') {
     return 'Enter chat · ←/→ room · c cancel current · +/- minimap · g go to · ? help';
@@ -717,6 +742,9 @@ export function App({
       if (mode === 'town') {
         return void state.loadTownHall();
       }
+      if (mode === 'events') {
+        return void state.refreshEvents();
+      }
       return void state.refreshQueue();
     }
     if (onScreen) {
@@ -982,7 +1010,9 @@ export function App({
                       ? createElement(DebugScreen, props)
                       : mode === 'town'
                         ? createElement(TownScreen, props)
-                        : createElement(ChatScreen, props);
+                        : mode === 'events'
+                          ? createElement(EventsScreen, props)
+                          : createElement(ChatScreen, props);
     screen = createElement(Box, { display: overlay ? 'none' : 'flex' }, el);
   }
 

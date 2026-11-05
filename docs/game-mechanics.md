@@ -124,6 +124,35 @@ browser client's code; **unverified** = assumed, check live and update this file
   the browser fills from `js`) and `reportInfo: {items: [[itemId, ?, count, type], …], job_id}`: the found
   items. Verified on a live Prospecting report (5× Fool's gold).
 
+## Events (`events.ts`)
+
+- **Seasonal events (SES)** come from `Game.init.sesData` in game.php: per event id (`DayOfDead`, `Hearts`,
+  `Easter`, `Independence`, `Octoberfest`) `meta {start?, end}`, `counter {key: 'ses:<stat>', value}`, milestone
+  `rewards {<collected>: {id, desc}}` (`id` is an item id, `wof-unlock` or `avatar-part-N`), `friendsbar {label,
+  cooldown}` and `premium`. The browser's `west.events.Manager` starts and stops them by those dates.
+- Dates are `dd.mm.yyyy hh:mm[:ss]` in server time, Europe/Berlin: DayOfDead's end `16.11.2026 12:00` equals the
+  wheel's epoch `endDate` 1794826800 (11:00 UTC). Verified from the saved game.php.
+- The counter is pushed on the chat long-poll: `SesStatChanged {<stat>: value}` (the client signals
+  `ses:<stat>`). Most currency comes from jobs (the report's unlabelled `355 Cempasúchil` line); the log is
+  `ses/log` (mode) `{ses_id, page, limit: 25}` → `{entries: [{date, type, value, description, details}], page,
+  hasNext}`, where `wofPay` values are spent.
+- **Friend gifts**: `friendsbar/search` (mode) `{search_type: 'friends'}` → `players` and `eventActivations
+  [{friend_id, event_name, activation_time}]`. A friend can get one gift per `cooldown` (82,800 s = 23 h for
+  DayOfDead). `friendsbar/event {player_id, event}` sends to one, `event_all {event}` to all eligible (the
+  browser's double click); both answer `{error, msg}`. Not yet seen live.
+- **Community events**: `Game.init.ceData` `{<id>: {event_name, event_end, event_progress, event_stages
+  {<points>: [{reward, reward_id, text}]}}}`, progress shared by all players; chat `CommEventChanged {event_id,
+  event_stage}`.
+- **Wheels**: `west.wof.WofManager.init([{id, type, name, title, free, endDate}])` in game.php. `dayofdeadwof` is
+  the Loteria de Muertos card game: `wheeloffortune/init` (mode) `{wofid}` → `mode {game {free_games, status,
+  current {stage, bribe_cost, change_reward_cost}}, stages [{rewards, card}], cost, currencies, conversion}`,
+  `prizes.gamblePrizes`; `wheeloffortune/gamble {action, wofid, …}` → `{game, stages, nuggets?}`. Five stages of three
+  cards. Status `closed → running` (open: free or `{currency_id}`) `→ won | lost` (gamble `{card}`); from won,
+  `continue` to the next stage (a wrong card loses the reward) or `end` to collect; from lost, `bribe
+  {currency_id: 2}` (nuggets) or `end`; on stage 5, `change {currency_id}` rerolls the reward. Pay ids: 1 bonds ·
+  2 nuggets · 4 dollars · 8 veteran points · 16 event currency (`conversion` scales the price). Unverified: the
+  reward and price shapes in replies (read from the client only).
+
 ## Chat
 
 - Messages carry links as tags in the text: `[item=<instance id>]` (seen live: `wtb [item=42085000]`). The client

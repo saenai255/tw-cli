@@ -171,7 +171,7 @@ samples. Logged to the debug log (`Calibration: …`); `runner.context().calibra
 
 ## Carrying out (runner: one thing per tick, only while running and not dry run)
 
-wake-up cancel → cancel-for-better → quest step → NPC duel for XP → send planned tasks (as many as the queue and
+wake-up cancel → cancel-for-better → event gifts → quest step → NPC duel for XP → send planned tasks (as many as the queue and
 current energy allow; a sleep ends a batch) or, with an empty queue, the next on-the-spot action (deposit in the
 town you stand in, use an item, buy quest items).
 
@@ -180,6 +180,10 @@ town you stand in, use an item, buy quest items).
   market offers are bought from anywhere, shop items when you stand in their town. A market buy is a bid at the
   buy-now price (from the bank when cash is short); the offer is recorded in `pickups` (`autopilot.json`, kept
   across restarts) and becomes a trip to its town. Item failures back off under `item:<base id>`.
+- Event gifts (`eventGifts`, on by default): every 10 min, while a seasonal event with a friend gift runs, it
+  re-reads the friends list and, when any friend's cooldown is over, sends to all eligible friends with one
+  `friendsbar/event_all` (then re-reads the cooldowns). Failures back off under `gift:<event>` / `gift:friends`.
+  The Loteria is never played by the autopilot: the player plays it on the Events screen (`g e`).
 - Failures: retry after 1 → 5 → 15 min; after 3 the step key is left out of plans. Session errors pause.
   Exception: a job refused for "N more energy points" is not a failure. Our energy estimate was ahead of the
   server's, so local energy is set to `job energy − N` and the plan is redone.
@@ -202,6 +206,7 @@ town you stand in, use an item, buy quest items).
 | Quests: buy items no job drops (shops in reach, mobile trader, market + pickup trip), time windows                | built (remote shop reads of other towns and market buys from afar unverified)             |
 | Quests: "Resolve / Accept: X" (accept the quest it waits on), "Go to X" (map giver coordinates), "Lose against X" | **not built** (logged once and skipped); next, after a live look at saloon / map givers   |
 | NPC duels for XP                                                                                                  | built; fights only levels the duel record knows (fight NPCs yourself in `g d` to fill it) |
+| Event gifts to friends (`friendsbar/event_all`)                                                                   | built (reply shape not yet seen live)                                                     |
 
 ## Decisions (grill session)
 
@@ -214,7 +219,9 @@ the market only under $5,000 (its trip to collect counted), trips ≤ 1 h, a min
 comparing sources · consumables valued at shop price · retries 1/5/15 min, 3 strikes · HP < 50 % sleep or item, up at ≥ 70 %
 at a hotel, 50–70 % keep working safely · NPC duels only (never players): HP ≥ 70 %, level ≤ duel level + margin,
 one loss stops them for the day, for XP when it beats the best job · plan to the 6 h horizon (was 10 jobs) · skip quests it cannot finish · level-up energy refund always on ·
-queue slots cost 10 min (the TUI is not open 24/7) · calibrate drops, HP, motivation, rooms from your own game.
+queue slots cost 10 min (the TUI is not open 24/7) · calibrate drops, HP, motivation, rooms from your own game ·
+event gifts: send-to-all, on by default, checked every 10 min · Loteria: announced, never played by the autopilot
+(the player decides every stage).
 
 ## Unverified (check live, then move to docs/game-mechanics.md)
 

@@ -46,7 +46,7 @@ the summary. Small gains compound; nobody needs to schedule a cleanup.
 ## Layout
 
 - `src/game/`: game logic, no UI. `state.ts` (GameState: owns the client, keeps state in sync), one module per area
-  (jobs, tasks, quests, hotel, trade, townhall, duels, …), the autopilot (`autopilot*.ts`, `timeline.ts`,
+  (jobs, tasks, quests, hotel, trade, townhall, duels, events, …), the autopilot (`autopilot*.ts`, `timeline.ts`,
   `quest-buy.ts` for buying quest items), `debug-log.ts` (`state.debug`: everything, with data;
   hourly JSONL files kept 24 h in `<config dir>/debug/`, Debug screen `g x`), `calibration.ts` (what the
   autopilot learns from reports, health, motivation and sleeps; `calibration.json`).

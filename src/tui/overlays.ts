@@ -22,7 +22,8 @@ export type Mode =
   | 'chat'
   | 'autopilot'
   | 'debug'
-  | 'town';
+  | 'town'
+  | 'events';
 /** Full screens that handle their own keys (global shortcuts still work unless they capture input). */
 export const SCREEN_MODES: Mode[] = [
   'home',
@@ -35,6 +36,7 @@ export const SCREEN_MODES: Mode[] = [
   'autopilot',
   'debug',
   'town',
+  'events',
 ];
 
 /** g then a key: screens, overlays and rare actions (the nav bar shows the screens). */
@@ -49,6 +51,12 @@ export const GOTO: { key: string; label: string; help: string; mode?: Mode; over
   { key: 'b', label: 'trade', mode: 'trade', help: 'trade: bank, shops, market, buy orders' },
   { key: 'd', label: 'duels', mode: 'duels', help: 'duels: NPCs & players' },
   { key: 'c', label: 'chat', mode: 'chat', help: 'full chat: rooms & whispers (needs live updates)' },
+  {
+    key: 'e',
+    label: 'events',
+    mode: 'events',
+    help: 'events: seasonal currency & rewards, friend gifts, Loteria, community event',
+  },
   { key: 'a', label: 'autopilot', mode: 'autopilot', help: 'autopilot: priorities, modules, projected queue' },
   {
     key: 'x',
@@ -119,6 +127,17 @@ const SHORTCUTS: Record<Mode | 'global', [string, string][]> = {
     ['↑ ↓  j k', 'choose a building · PgUp/PgDn ×10'],
     ['Enter', 'load construction detail and start a job'],
     ['u', 'refresh building levels'],
+    ['Esc', 'back'],
+  ],
+  events: [
+    ['← →  Tab', 'event · Loteria · log'],
+    ['s', '(event) send currency to all eligible friends (confirm y) · (Loteria) start a game'],
+    ['1 2 3', '(Loteria) pick a card'],
+    ['n', '(Loteria) go to the next stage, risking the reward (confirm y)'],
+    ['c', '(Loteria) collect the reward and end the game (confirm y)'],
+    ['b  r', '(Loteria) bribe after a loss · reroll the last stage reward (pick a currency)'],
+    ['< >', '(log) previous / next page'],
+    ['u', 'refresh friends, Loteria and log'],
     ['Esc', 'back'],
   ],
   quests: [
@@ -209,6 +228,7 @@ const MODE_TITLE: Record<Mode, string> = {
   autopilot: 'Autopilot',
   debug: 'Debug',
   town: 'Town',
+  events: 'Events',
 };
 
 const LEGEND: [string, string, string][] = [
@@ -243,14 +263,19 @@ export function HelpOverlay({ mode, width, height }: { mode: Mode; width: number
     Box,
     { flexDirection: 'column', borderStyle: 'double', borderColor: 'yellow', paddingX: 2, width, height },
     createElement(
-      Text,
-      { bold: true, color: 'yellow' },
-      `Keyboard shortcuts · ${MODE_TITLE[mode].toLowerCase()}   (any key closes)`,
+      Box,
+      { flexShrink: 0, flexDirection: 'column' },
+      createElement(
+        Text,
+        { bold: true, color: 'yellow', wrap: 'truncate' },
+        `Keyboard shortcuts · ${MODE_TITLE[mode].toLowerCase()}   (any key closes)`,
+      ),
+      createElement(Text, null, ' '),
     ),
-    createElement(Text, null, ' '),
+    // Too tall for the terminal: the lists clip at the bottom, the title stays.
     createElement(
       Box,
-      { gap: 4 },
+      { gap: 4, flexShrink: 1, overflow: 'hidden' },
       createElement(
         Box,
         { flexDirection: 'column' },

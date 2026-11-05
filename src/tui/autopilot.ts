@@ -23,6 +23,7 @@ export const BUILT_MODULES = new Set<ModuleKey>([
   'consumables',
   'quests',
   'npcDuels',
+  'eventGifts',
 ]);
 
 const GOAL_LABEL: Record<Goal, string> = {
@@ -164,6 +165,7 @@ export const ROWS: [Row, ...Row[]] = [
     10,
     (value) => (value > 0 ? `+${value}` : String(value)),
   ),
+  moduleToggle('eventGifts', 'Event gifts: send currency to all eligible friends'),
   { kind: 'head', text: 'Replanning & limits' },
   numberSetting(
     (configValue) => configValue,

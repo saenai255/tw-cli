@@ -19,6 +19,7 @@ import { CharacterState, type Position } from './character.ts';
 import { ServerClock } from './clock.ts';
 import { DebugLog, diffSnapshots } from './debug-log.ts';
 import { DuelApi, type DuelData, type DuelOpponent, duelPost, type NpcDuelResult } from './duels.ts';
+import { type CardGameSession, EventApi, EventBoard, nextMilestone, parseCardGame } from './events.ts';
 import { fetchHotel, type Hotel, type HotelRoom, roomRate } from './hotel.ts';
 import { type EquipSets, Inventory, InventoryApi } from './inventory.ts';
 import { baseId, type ItemCatalog, type ItemSetCatalog, loadItemCatalog, loadItemSets, statsOf } from './items.ts';
@@ -219,6 +220,8 @@ export class GameState extends EventEmitter {
   live: ChatPoller | null = null;
   liveStatus: 'off' | 'connecting' | 'on' | 'error' = 'off';
   unread = { reports: false, messages: false };
+  /** Seasonal and community events, friend gifts, the Loteria (game/events.ts). */
+  events = new EventBoard();
   /** Jobs marked on the map for a quest (`g` in the quest screen). */
   mapHighlight: { label: string; jobIds: Set<number> } | null = null;
   /** Map layers switched off by the user (v on the map); saved in the config dir. */
@@ -291,6 +294,13 @@ export class GameState extends EventEmitter {
     this.townHall = null;
     this.construction = null;
     this.skills = Skills.fromInit(isObj(bootstrap.character?.skillData) ? bootstrap.character.skillData : undefined);
+    const previousEvents = this.events;
+    this.events = EventBoard.fromBootstrap(bootstrap.game, bootstrap.wheels ?? []);
+    if (previousEvents?.friends) {
+      this.events.friends = previousEvents.friends;
+      this.events.activations = previousEvents.activations;
+      this.events.friendsAt = previousEvents.friendsAt;
+    }
     const wasLive = !!this.live?.active;
     this.live?.stop();
     this.live = null;
@@ -628,6 +638,7 @@ export class GameState extends EventEmitter {
     await this.step('Jobs and map', () => this.loadJobs(true));
     await this.step('Item data', () => this.loadItems());
     await this.step('Quest log', () => this.loadQuests(true));
+    this.announceEvents();
     if (opts.live !== false) {
       await this.step('Live updates', async () => this.startLive());
     }
@@ -641,6 +652,146 @@ export class GameState extends EventEmitter {
       this.startup.done = true;
     }
     this.changed();
+  }
+
+  // ---- events -------------------------------------------------------------------------------
+
+  private get eventApi(): EventApi {
+    return new EventApi(this.client);
+  }
+
+  /** Startup: what runs, the next milestone, and a free Loteria game (the player plays it, g e). */
+  private announceEvents(): void {
+    const now = this.clock.now();
+    for (const event of this.events.running(now)) {
+      const next = nextMilestone(event);
+      this.info(
+        `Event ${event.id}: ${event.collected.toLocaleString('en')} ${event.currency}${next ? `, next reward at ${next.at.toLocaleString('en')}` : ''} (g e).`,
+      );
+    }
+    const wheel = this.events.cardGameWheel(now);
+    if (wheel?.free) {
+      this.info(`${wheel.title}: ${wheel.free} free game(s) waiting. Play it on the Events screen (g e).`);
+    }
+  }
+
+  applyEventStats(stats: Record<string, number>): void {
+    for (const { event, reached } of this.events.applyStats(stats)) {
+      this.debug.add('state', `Event ${event.id}: ${event.collected} ${event.currency}`, { stats, reached });
+      for (const milestone of reached) {
+        this.info(`Event ${event.id}: ${milestone.at.toLocaleString('en')} reached: ${milestone.text}`);
+      }
+    }
+    this.changed();
+  }
+
+  async loadFriends(): Promise<void> {
+    const list = await this.guard('Friends', () => this.eventApi.friends());
+    if (list) {
+      this.events.setFriends(list, Date.now());
+    }
+  }
+
+  /** The autopilot's friends read (throws; the runner backs off). */
+  async autopilotLoadFriends(): Promise<void> {
+    const list = await this.autopilotCall(() => this.eventApi.friends(), 'friends (event gifts)');
+    this.events.setFriends(list, Date.now());
+  }
+
+  /** friendsbar/event_all, then re-reads the friends list for the new cooldowns. */
+  async sendEventGifts(eventId: string, by: 'you' | 'autopilot' = 'you'): Promise<boolean> {
+    const send = () => this.eventApi.giftAll(eventId);
+    const message =
+      by === 'autopilot'
+        ? await this.autopilotCall(send, `event gifts (${eventId})`)
+        : await this.guard(`Event gifts (${eventId})`, send);
+    if (message === undefined) {
+      return false;
+    }
+    this.info(`${by === 'autopilot' ? 'Autopilot: ' : ''}${eventId} gifts: ${message}`);
+    this.debug.add('autopilot', `Event gifts sent (${eventId}) by ${by}`, { eventId, message });
+    try {
+      this.events.setFriends(await this.eventApi.friends(), Date.now());
+    } catch (err) {
+      this.debug.add('request', 'Friends after gifts: failed', { error: errorMessage(err) });
+    }
+    this.changed();
+    return true;
+  }
+
+  /** u on the Events screen: friends, the Loteria and the log page shown. */
+  async refreshEvents(): Promise<void> {
+    await this.loadFriends();
+    if (this.events.cardGame) {
+      await this.openCardGame();
+    }
+    if (this.events.log) {
+      await this.loadEventLog(this.events.log.eventId, this.events.log.page);
+    }
+  }
+
+  async loadEventLog(eventId: string, page = 1): Promise<void> {
+    const log = await this.guard('Event log', () => this.eventApi.log(eventId, page));
+    if (log) {
+      this.events.log = { ...log, eventId };
+    }
+  }
+
+  private cardGameFrom(session: Omit<CardGameSession, 'game'>): CardGameSession {
+    const currency = this.events.seasonal.find((event) => event.id === 'DayOfDead')?.currency;
+    return { ...session, game: parseCardGame(session.init, null, (id) => this.itemName(id), currency) };
+  }
+
+  async openCardGame(): Promise<void> {
+    const wheel = this.events.cardGameWheel(this.clock.now());
+    if (!wheel) {
+      this.events.cardGame = null;
+      return;
+    }
+    const init = await this.guard('Loteria', () => this.eventApi.wheel(wheel.id));
+    if (init) {
+      this.events.cardGame = this.cardGameFrom({ wheel, init });
+      wheel.free = this.events.cardGame.game.freeGames;
+    }
+  }
+
+  /** One Loteria action; the player decides every step (nothing here is automated). */
+  async playCardGame(
+    action: 'open' | 'gamble' | 'continue' | 'bribe' | 'change' | 'end',
+    data: Record<string, number> = {},
+  ): Promise<void> {
+    const session = this.events.cardGame;
+    if (!session) {
+      return;
+    }
+    const reply = await this.guard(`Loteria: ${action}`, () => this.eventApi.gamble(session.wheel.id, action, data));
+    if (!reply) {
+      return;
+    }
+    if (reply.nuggets !== undefined) {
+      this.character.nuggets = Number(reply.nuggets) || 0;
+    }
+    const merged: JsonObject = {
+      ...session.init,
+      mode: {
+        ...obj(session.init.mode),
+        game: { ...obj(obj(session.init.mode).game), ...obj(reply.game) },
+        ...(reply.stages === undefined ? {} : { stages: reply.stages }),
+      },
+    };
+    this.events.cardGame = this.cardGameFrom({ wheel: session.wheel, init: merged });
+    session.wheel.free = this.events.cardGame.game.freeGames;
+    const game = this.events.cardGame.game;
+    this.debug.add('state', `Loteria ${action}: ${game.status}, stage ${game.stage}`, { action, data, reply });
+    if (action === 'end') {
+      const collected = session.game.reward;
+      this.info(`Loteria: collected${collected.length ? ` ${collected.join(', ')}` : ' the reward'}.`);
+      void this.refreshInventory();
+    } else if (game.status === 'lost') {
+      this.info(`Loteria: wrong card at stage ${game.stage}.`);
+    } else if (game.status === 'won') {
+      this.info(`Loteria: stage ${game.stage} won${game.reward.length ? `: ${game.reward.join(', ')}` : ''}.`);
+    }
   }
 
   // ---- live updates -------------------------------------------------------------------------
@@ -694,6 +845,12 @@ export class GameState extends EventEmitter {
       this.changed();
     });
     poller.on('tell', ({ from, message }: { from: string; message: string }) => this.info(`✉ ${from}: ${message}`));
+    poller.on('ses', (stats) => this.applyEventStats(stats));
+    poller.on('communityEvent', ({ id, stage }) => {
+      const name = this.events.community.find((event) => event.id === id)?.name ?? id;
+      this.debug.add('state', `Community event ${name}: stage ${stage}`, { id, stage });
+      this.info(`Community event ${name} reached stage ${stage}.`);
+    });
     poller.on('chat', () => this.changed());
     poller.on('rooms', () => this.changed());
     poller.on('tellFailed', () => this.error('You can only whisper to players that you can see in a chat window.'));

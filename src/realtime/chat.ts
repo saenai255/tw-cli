@@ -14,6 +14,7 @@
 //               health, health_date, health_regen, ...}  for our id → Character.set*
 //   QuestDataChanged → reload quest log; ReportChanged / ReadState → unread markers;
 //   NuggetsChanged {nuggets}; TellReceived {from:{name}, message}; CharDeathStateChanged.
+//   SesStatChanged {<stat>: value} → seasonal event counter ('ses:<stat>'); CommEventChanged {event_id, event_stage}.
 //   error "invalid sid" / "sid invalidated by login" → session gone.
 // Chat rooms (Chat.Resource.* @1027002, Response.* @1045596): Status.rooms[{roomdescription:{id, room
 //   (town|general|maneuver|fortbattle), title, topic, townid, general_id}, members:[client id]}], Status.clients
@@ -183,6 +184,9 @@ export interface ChatPollerEvents {
   rooms: [];
   tellFailed: [];
   revived: [JsonObject];
+  /** Seasonal event stats, e.g. {dayofdead_collected: 50113}. */
+  ses: [Record<string, number>];
+  communityEvent: [{ id: string; stage: number }];
   event: [ChatEvent];
   invalid: [string];
   error: [Error];
@@ -484,6 +488,15 @@ export class ChatPoller extends EventEmitter<ChatPollerEvents> {
       }
       case 'CharDeathStateChanged':
         this.emit('revived', payload);
+        break;
+      case 'SesStatChanged':
+        this.emit(
+          'ses',
+          Object.fromEntries(Object.entries(payload).map(([stat, value]) => [stat, Number(value) || 0])),
+        );
+        break;
+      case 'CommEventChanged':
+        this.emit('communityEvent', { id: String(payload.event_id ?? ''), stage: Number(payload.event_stage) || 0 });
         break;
     }
   }
