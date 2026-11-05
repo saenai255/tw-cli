@@ -605,6 +605,24 @@ test('state: wear/unwear, skills save, quest accept/finish, sleep send the clien
     setItems: [54977, 54979, 54982, 54986, 54983, 54978, 54984, 54981, 54980],
     bonus: { allBonuspoints: {} },
   });
+  routes['/game.php?window=inventory&action=save_equip'] = () => ({
+    error: false,
+    data: {
+      equip_manager_id: 2000,
+      name: 'mine',
+      head: 54988000,
+      body: 54990000,
+      foot: 54993000,
+      right_arm: 54997000,
+      animal: 54994000,
+      neck: 54989000,
+      yield: null,
+      pants: 54981000,
+      belt: 11118000,
+      left_arm: null,
+    },
+  });
+  routes['/game.php?window=inventory&action=replace_equip'] = () => ({ error: false });
   routes['/game.php?window=skill&action=save_skill_changes'] = () => ({ error: false, msg: 'Skills changed.' });
   routes['/game.php?window=building_quest&mode=get_open_quests'] = () => QUESTS;
   routes['/game.php?window=quest&action=accept_quest'] = () => ({ error: false, finishable: false });
@@ -670,6 +688,20 @@ test('state: wear/unwear, skills save, quest accept/finish, sleep send the clien
   assert.equal(state.inventory.wear.get('head'), 54988000);
   assert.equal(state.inventory.wear.get('belt'), 11118000);
   assert.equal(state.character.speed, 1.1);
+  assert.equal(await state.saveEquipSet('mine'), 2000);
+  assert.deepEqual(
+    Object.fromEntries(
+      new URLSearchParams(calls.find((candidate) => candidate.url.includes('action=save_equip'))!.body),
+    ),
+    { name: 'mine' },
+  );
+  assert.ok(await state.replaceEquipSet(1334));
+  assert.deepEqual(
+    Object.fromEntries(
+      new URLSearchParams(calls.find((candidate) => candidate.url.includes('action=replace_equip'))!.body),
+    ),
+    { id: '1334' },
+  );
 
   const plan = emptyPlan();
   adjustPlan(plan, state.skills, 'trade', 1);
@@ -752,6 +784,11 @@ test('TUI: character screen (wear, plan + save skills) and quests screen (finish
     setItems: [],
     bonus: { allBonuspoints: {} },
   });
+  routes['/game.php?window=inventory&action=save_equip'] = () => ({
+    error: false,
+    data: { equip_manager_id: 2000, name: 'mine' },
+  });
+  routes['/game.php?window=inventory&action=replace_equip'] = () => ({ error: false });
   routes['/game.php?window=skill&action=save_skill_changes'] = () => ({ error: false, msg: 'Skills changed.' });
   routes['/game.php?window=building_quest&mode=get_open_quests'] = () => QUESTS;
   routes['/game.php?window=building_quest&mode='] = () => ({
@@ -855,6 +892,21 @@ test('TUI: character screen (wear, plan + save skills) and quests screen (finish
     await settle(200);
     assert.equal(
       new URLSearchParams(calls.find((candidate) => candidate.url.includes('action=switch_equip'))!.body).get('id'),
+      '1334',
+    );
+    // Save the current wear, then replace the selected set with it.
+    await keys('S', 'm', 'i', 'n', 'e', '\r');
+    await settle(200);
+    assert.equal(
+      new URLSearchParams(calls.find((candidate) => candidate.url.includes('action=save_equip'))!.body).get('name'),
+      'mine',
+    );
+    await keys('R');
+    assert.match(plain(), /Replace xp with the current wear\? y \/ n/);
+    await keys('y');
+    await settle(200);
+    assert.equal(
+      new URLSearchParams(calls.find((candidate) => candidate.url.includes('action=replace_equip'))!.body).get('id'),
       '1334',
     );
     // Skills: plan +1 Trading with '+', save with Enter → y.

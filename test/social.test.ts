@@ -20,7 +20,8 @@ const { CookieJar } = await import('../src/http/cookie-jar.ts');
 const { GameClient } = await import('../src/http/game-client.ts');
 const { resetThrottle } = await import('../src/http/throttle.ts');
 const { GameState } = await import('../src/game/state.ts');
-const { ItemCatalog } = await import('../src/game/items.ts');
+const { ItemCatalog, slimItem } = await import('../src/game/items.ts');
+const { parseActiveEvent } = await import('../src/game/event.ts');
 const { parseQuest } = await import('../src/game/quests.ts');
 const { ChatPoller, chatPresence } = await import('../src/realtime/chat.ts');
 const { MarketApi, parseOffer, depositFee, marketFee, buyOrderProblem, suggestedBid, DEFAULT_FILTER } = await import(
@@ -569,6 +570,73 @@ test('trade: bank deposit, shop buy/sell, item use and market requests', async (
   );
 });
 
+test('daily login bonus: the startup hook collects once when the bootstrap says it is available', async () => {
+  fakeServer();
+  const state = makeState();
+  let collected = false;
+  routes['/game.php?window=loginbonus&action=collect'] = () => {
+    collected = true;
+    return { rewards: { xp: 120, nuggets: 3, upb: 2 } };
+  };
+
+  await state.autoCollectLoginBonus();
+
+  assert.equal(collected, false, 'not collected when the bootstrap says there is no bonus');
+
+  state.hasLoginBonus = true;
+  await state.autoCollectLoginBonus();
+
+  assert.equal(collected, true);
+  assert.match(
+    state.log.filter((line) => /Daily login bonus/.test(line.msg)).at(-1)!.msg,
+    /120 XP.*3 nuggets.*2 bonds/,
+  );
+});
+
+test('TUI: event progress and ready event item in the header', async () => {
+  fakeServer();
+  const state = makeState();
+  state.event = parseActiveEvent({
+    sesData: {
+      DayOfDead: {
+        meta: { end: '16.11.2026 12:00:59' },
+        rewards: {
+          90000: { id: 54973000, desc: 'spear' },
+          110000: { id: 54975000, desc: 'torch' },
+        },
+        counter: { key: 'ses:dayofdead_collected', value: 95000 },
+      },
+    },
+    ceData: { dayofdead: { event_name: 'Day of the Dead 2026' } },
+  });
+  state.items!.add(
+    slimItem({
+      item_id: 2665000,
+      name: 'Flower pot',
+      type: 'yield',
+      usetype: 'use',
+      action: true,
+      description:
+        'Generates 1250 flowers for the day of the dead event, which can be collected once every 11.5 hours.',
+      usebonus: ['1250 Cempasúchil'],
+    }),
+  );
+  state.inventory.bag.set(2665000, { itemId: 2665000, count: 1, invId: 1, type: 'yield' });
+  state.inventory.itemCooldown.set(2665000, state.clock.now() - 10);
+  state.inventory.itemLifetime.set(2665000, 1000);
+
+  const term = tui(state);
+  try {
+    await term.settle(200);
+    assert.match(term.plain(), /Day of the Dead 2026/);
+    assert.match(term.plain(), /95,000 \/ 110,000/);
+    assert.match(term.plain(), /15,000 to next/);
+    assert.match(term.plain(), /Flower pot \+1250 ready/);
+  } finally {
+    term.done();
+  }
+});
+
 test('town hall: building levels, construction detail and the build task post', async () => {
   fakeServer();
   const state = makeState();
@@ -1005,6 +1073,10 @@ test('chat: rooms and history from Status / Text / tells, sending is a second re
   assert.equal(poller.clients.get('client_9')!.name, 'Bob', 'missing fields keep their old values');
   assert.deepEqual([poller.clients.get('client_9')!.level, poller.clients.get('client_9')!.townRights], [13, 2]);
   assert.equal(chatPresence(poller.clients.get('client_9')!.actioned), 'online');
+  const ses: Record<string, unknown>[] = [];
+  poller.on('ses', (stats) => ses.push(stats));
+  poller.handle({ id: 'SesStatChanged', t: 2, payload: { dayofdead_collected: 96000 } });
+  assert.deepEqual(ses, [{ dayofdead_collected: 96000 }]);
   poller.handle({ id: 'Text', t: 2, payload: { cid: 'client_9', to: 'room_town_1421', message: 'howdy &amp; hi' } });
   poller.handle({ id: 'TellReceived', t: 3, payload: { from: { id: 'client_7', name: 'Ann' }, message: 'psst' } });
   assert.deepEqual(

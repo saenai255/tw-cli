@@ -63,6 +63,8 @@ function Header({ state }: { state: GameState }) {
     ? `automation ${formatDuration(state.automationUntil - now)}`
     : 'no automation';
   const finishableQuests = state.quests.filter((quest) => quest.finishable).length;
+  const event = state.event;
+  const readyItems = event ? state.eventReadyItems() : [];
   return createElement(
     Box,
     { flexDirection: 'column', borderStyle: 'round', borderColor: 'yellow', paddingX: 1 },
@@ -79,6 +81,7 @@ function Header({ state }: { state: GameState }) {
         { dimColor: true, wrap: 'truncate' },
         `${state.worldName} · ${automation} · `,
         createElement(Text, { color: LIVE_COLOR[state.liveStatus], dimColor: false }, `● live ${state.liveStatus}`),
+        state.hasLoginBonus ? createElement(Text, { color: 'yellow' }, ' · daily bonus pending') : '',
         state.unread.reports ? createElement(Text, { color: 'yellow' }, ` · ${ICON.mail} new report (g r)`) : '',
         state.unread.messages ? createElement(Text, { color: 'yellow' }, ` · ${ICON.mail} new telegram (g r)`) : '',
         state.live?.unreadRooms.size
@@ -94,6 +97,7 @@ function Header({ state }: { state: GameState }) {
         state.busy ? ' · working…' : '',
       ),
     ),
+    createElement(Text, null, ' '),
     createElement(
       Text,
       { wrap: 'truncate' },
@@ -114,6 +118,29 @@ function Header({ state }: { state: GameState }) {
           )
         : '',
     ),
+    event ? createElement(Text, null, ' ') : null,
+    event
+      ? createElement(
+          Text,
+          { wrap: 'truncate' },
+          createElement(Text, { color: 'magenta', bold: true }, event.name),
+          '  ',
+          bar(event.points, event.next?.at ?? Math.max(1, event.points), 10),
+          ' ',
+          `${event.points.toLocaleString('en-US')}${
+            event.next
+              ? ` / ${event.next.at.toLocaleString('en-US')} · ${(event.next.at - event.points).toLocaleString('en-US')} to next`
+              : ' · all rewards reached'
+          }`,
+          readyItems.length
+            ? createElement(
+                Text,
+                { color: 'green' },
+                ` · ${readyItems.map((item) => `${item.name}${item.amount ? ` +${item.amount}` : ''}`).join(', ')} ready`,
+              )
+            : '',
+        )
+      : null,
   );
 }
 
@@ -429,7 +456,8 @@ export function App({
   const height = rows || 30;
   // Home and jobs show twice the log (finished jobs, drops, item uses, autopilot actions).
   const logLines = (height >= 32 ? 5 : 3) * ((mode === 'main' || mode === 'home') && !overlay ? 2 : 1);
-  const bodyH = Math.max(10, height - 4 - 1 - logLines - 1);
+  // Header: two data lines with blank separators, plus an event line while one is active.
+  const bodyH = Math.max(10, height - (state.event ? 7 : 5) - 1 - logLines - 1);
   const grid = mapGridSize(width, bodyH);
 
   const options = useMemo(

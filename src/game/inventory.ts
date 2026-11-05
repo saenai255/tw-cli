@@ -7,8 +7,10 @@
 //   inventory/inventory_changed {inv_id}      → {changes|false, wear:{slot:item_id|null}}
 //   inventory/show_equip (mode)               → {data:[{equip_manager_id, name, head, neck, …}], max, premium_max, hasPremium, price}
 //   inventory/switch_equip {id, last_inv_id}  → {changes, wear:[item ids], setItems, workPointBonus, speed, weapon}
+//   inventory/save_equip {name}               → {error?, data:<the new set>}
+//   inventory/replace_equip {id}              → {error?} (the set now holds the current wear)
 import type { GameClient } from '../http/game-client.ts';
-import { arr, type JsonObject, objs, vals } from '../util/json.ts';
+import { arr, entries, isObj, type JsonObject, obj, objs, vals } from '../util/json.ts';
 import { baseId, type ItemCatalog, WEAR_SLOTS } from './items.ts';
 
 export interface BagItem {
@@ -55,29 +57,65 @@ const toBagItem = (jsonValue: JsonObject): BagItem => ({
   type: String(jsonValue.type ?? ''),
 });
 
+function parseEquipSet(jsonValue: JsonObject): EquipSet {
+  const slots: Record<string, number | null> = {};
+  for (const slot of WEAR_SLOTS) {
+    const id = Number(jsonValue[slot]);
+    slots[slot] = id > 0 ? id : null;
+  }
+  return {
+    id: Number(jsonValue.equip_manager_id) || 0,
+    name: String(jsonValue.name ?? 'Set'),
+    slots,
+  };
+}
+
 export class Inventory {
   /** item_id → bag entry */
   bag = new Map<number, BagItem>();
   /** slot → item_id */
   wear = new Map<string, number>();
+  /** item_id → epoch seconds when it can be used again (Bag.itemCooldown). */
+  itemCooldown = new Map<number, number>();
+  /** item_id → remaining lifetime in seconds (Bag.itemLifetime); absent when it does not expire. */
+  itemLifetime = new Map<number, number>();
   lastInvId = 0;
 
   static fromInit(bagInit: JsonObject | null | undefined, catalog?: ItemCatalog): Inventory {
-    const inv = new Inventory();
+    const inventory = new Inventory();
     for (const list of vals(bagInit?.bag)) {
       for (const jsonValue of objs(list)) {
-        inv.put(toBagItem(jsonValue));
+        inventory.put(toBagItem(jsonValue));
       }
     }
     for (const id of arr(bagInit?.wear).map(Number)) {
       const type = catalog?.get(id)?.type;
       if (type) {
-        inv.wear.set(type, Number(id));
+        inventory.wear.set(type, Number(id));
       } else {
-        inv.wear.set(`#${id}`, Number(id)); // type unknown until items load; fixed by retype()
+        inventory.wear.set(`#${id}`, Number(id)); // type unknown until items load; fixed by retype()
       }
     }
-    return inv;
+    inventory.setItemMeta(bagInit?.itemCooldown, bagInit?.itemLifetime);
+    return inventory;
+  }
+
+  /** Replaces the item cooldown / lifetime maps from Bag.init (or a fresh game.php sync). */
+  setItemMeta(cooldown: unknown, lifetime: unknown): void {
+    this.itemCooldown.clear();
+    for (const [id, at] of entries(obj(cooldown))) {
+      const timestamp = Number(at);
+      if (Number.isFinite(timestamp) && timestamp > 0) {
+        this.itemCooldown.set(Number(id), timestamp);
+      }
+    }
+    this.itemLifetime.clear();
+    for (const [id, seconds] of entries(obj(lifetime))) {
+      const remaining = Number(seconds);
+      if (Number.isFinite(remaining)) {
+        this.itemLifetime.set(Number(id), remaining);
+      }
+    }
   }
 
   /** Puts worn items under their slot once the item catalog is available. */
@@ -216,16 +254,8 @@ export class InventoryApi {
     if (json.error) {
       throw new Error(String(json.msg ?? json.error));
     }
-    const sets: EquipSet[] = objs(json.data).map((jsonValue) => {
-      const slots: Record<string, number | null> = {};
-      for (const slot of WEAR_SLOTS) {
-        const id = Number(jsonValue[slot]);
-        slots[slot] = id > 0 ? id : null;
-      }
-      return { id: Number(jsonValue.equip_manager_id) || 0, name: String(jsonValue.name ?? 'Set'), slots };
-    });
     return {
-      sets,
+      sets: objs(json.data).map(parseEquipSet),
       max: Number(json.max) || 0,
       premiumMax: Number(json.premium_max) || 0,
       hasPremium: !!json.hasPremium,
@@ -242,8 +272,25 @@ export class InventoryApi {
     const result = this.cloth(json);
     return {
       ...result,
-      wear: Array.isArray(json.wear) ? json.wear.map(Number) : [],
-      setItems: Array.isArray(json.setItems) ? json.setItems.map(Number) : [],
+      wear: arr(json.wear).map(Number),
+      setItems: arr(json.setItems).map(Number),
     };
+  }
+
+  /** Saves the current equipment as a new set (EquipManager.save). */
+  async saveEquip(name: string): Promise<EquipSet | null> {
+    const json = await this.client.remoteCall('inventory', 'save_equip', { name });
+    if (json.error) {
+      throw new Error(String(json.msg ?? json.error));
+    }
+    return isObj(json.data) ? parseEquipSet(json.data) : null;
+  }
+
+  /** Overwrites a saved set with the current equipment (EquipManager.replaceEquip). */
+  async replaceEquip(id: number): Promise<void> {
+    const json = await this.client.remoteCall('inventory', 'replace_equip', { id });
+    if (json.error) {
+      throw new Error(String(json.msg ?? json.error));
+    }
   }
 }

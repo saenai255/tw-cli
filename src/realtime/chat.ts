@@ -13,7 +13,8 @@
 //   UserUpdate {id, x, y, level, experience, money, deposit, energy, energy_date, energy_regen,
 //               health, health_date, health_regen, ...}  for our id → Character.set*
 //   QuestDataChanged → reload quest log; ReportChanged / ReadState → unread markers;
-//   NuggetsChanged {nuggets}; TellReceived {from:{name}, message}; CharDeathStateChanged.
+//   NuggetsChanged {nuggets}; SesStatChanged {<stat>: value}; TellReceived {from:{name}, message};
+//   CharDeathStateChanged.
 //   error "invalid sid" / "sid invalidated by login" → session gone.
 // Chat rooms (Chat.Resource.* @1027002, Response.* @1045596): Status.rooms[{roomdescription:{id, room
 //   (town|general|maneuver|fortbattle), title, topic, townid, general_id}, members:[client id]}], Status.clients
@@ -177,6 +178,7 @@ export interface ChatPollerEvents {
   reports: [JsonObject];
   read: [JsonObject];
   nuggets: [number];
+  ses: [JsonObject];
   tell: [{ from: string; message: string }];
   text: [{ room: string; cid: string; message: string }];
   chat: [string, ChatLine];
@@ -460,6 +462,9 @@ export class ChatPoller extends EventEmitter<ChatPollerEvents> {
         break;
       case 'NuggetsChanged':
         this.emit('nuggets', Number(payload.nuggets));
+        break;
+      case 'SesStatChanged':
+        this.emit('ses', payload);
         break;
       case 'TellReceived': {
         const from = this.acquireClient(payload.from)?.name ?? '?';

@@ -183,6 +183,10 @@ export interface UseResult {
   effects: string[];
   energy?: number | undefined;
   health?: number | undefined;
+  /** ItemUse reply: epoch seconds when the item can be used again. */
+  itemCooldown?: number | undefined;
+  /** ItemUse reply: remaining lifetime in seconds. */
+  itemLifetime?: number | undefined;
 }
 
 /** ItemUse.doIt effect messages (texts as the web shows them). */
@@ -244,6 +248,8 @@ export async function useItem(
     effects: effects.flatMap((jsonValue) => effectText(jsonValue, itemName)),
     energy: optNum(effects.find((jsonValue) => jsonValue.type === 'energy')?.energy),
     health: optNum(effects.find((jsonValue) => jsonValue.type === 'hitpoints')?.hitpoints),
+    itemCooldown: optNum(msg.itemCooldown),
+    itemLifetime: optNum(msg.itemLifetime),
   };
 }
 

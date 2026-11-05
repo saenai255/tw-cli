@@ -33,12 +33,15 @@ Ink (React without JSX: `const h = React.createElement`). Shell in `src/tui/app.
 
 ## Screens
 
+- **Header**: two data lines with blank separators; another line appears while a seasonal event is active, with
+  the event name, personal progress toward the next reward, and the names of ready event generator items (green).
+  The line is driven by `state.event` and `state.eventReadyItems()`; a body row is reserved only while it is shown.
 - **Home** (`home.ts`, mode `home`, the start screen; `g h`; where Esc ends up): working panel
   (queue head: progress bar, time left, expected rewards via `state.queuedJob()`, "✓ done" with the report
   summary for 30 s, autopilot status), session (measured XP/h and $/h from `state.rates`, queued rate from
   `state.timeline()`, level ETA, regen "full at"), task queue (`QueuePane` from `queue.ts`, shared with the jobs
   screen; fills the rest of the left column, rows measured with `measureElement`), minimap (`buildGrid` around `@`, +/-),
-  newest reports (`state.recentReports`), interactive chat. Small terminals drop chat (< 24 rows), then the
+  newest reports (`state.recentReports`), interactive chat. Small terminals drop chat (< 23 rows), then the
   right column (< 96 cols).
 - Reports on home cost no polling: one read on first show, then the live "new report" push (which already
   fetches page 1 for its log lines) fills `recentReports`; without live updates, one re-read 5 s after a job ends.
@@ -50,14 +53,18 @@ Ink (React without JSX: `const h = React.createElement`). Shell in `src/tui/app.
 - **Character** (`character.ts`, mode `char`, `g i`): three tabs, `← →` cycles Inventory → Sets → Skills. Bag
   `Enter/e` uses an item when `usetype !== 'none'` (coffee is a usable `yield` product) and equips it only when
   it has `usetype: 'none'`; `U` always opens the use form. **Sets** lists `inventory/show_equip` sets, shows the
-  slots and the currently worn alternative, and `Enter` + `y` switches (`switch_equip`); saving/replacing sets
-  stays in the browser.
+  slots and the currently worn alternative, and `Enter` + `y` switches (`switch_equip`). `S` saves the current
+  wear as a new named set (`save_equip`); `R` + `y` replaces the selected set (`replace_equip`); delete stays
+  browser-only.
 - **Trade** (`trade.ts`, mode `trade`, `g b`): Bank · Mobile trader · General store · Tailor · Gunsmith · Market ·
   My market. Mobile trader loads `shop_trader`'s `trader` offers anywhere, shows the dollar price and rotation
   time, and buys with `Enter`; the bag and offers are re-read after a buy.
 - **Chat** (`chat.ts`, mode `chat`, `g c`): for the town room, a third column lists the clients in the room with
   presence (● online / ◐ idle, 5 min), name, role (Mayor / Councillor / Citizen / Guest) and level, online-first.
   It is hidden below 90 columns with a note; whisper/saloon rooms keep the two-column layout.
+- **Daily login bonus**: no screen. `GameState.start()` checks `Player.hasLoginBonus` and collects once after the
+  startup steps; the log line shows the reward. `daily bonus pending` stays in the header only if collection
+  failed. The separate 7-day pony-express delivery is not shown.
 - **Town** (`town.ts`, mode `town`, `g t`): the home town's city hall (`building_cityhall`), building levels,
   progress bars, and construction detail. `Enter` opens a form with the available duration and payer (town
   treasury / private), then queues a `taskType: 'build'` task. `u` refreshes; it does not use the town you are

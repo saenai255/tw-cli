@@ -120,7 +120,7 @@ export function HomeScreen({ state, width, height, onCapture, active = true }: S
   );
 
   // Small terminals drop panels: chat first, then the right column (minimap, reports).
-  const chatH = height >= 24 ? Math.max(6, Math.floor(height * 0.3)) : 0;
+  const chatH = height >= 23 ? Math.max(6, Math.floor(height * 0.3)) : 0;
   const topH = height - chatH;
   const wide = width >= 96;
   const leftW = wide ? Math.max(48, Math.floor(width * 0.5)) : width;

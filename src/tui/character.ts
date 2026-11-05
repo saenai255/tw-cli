@@ -130,6 +130,8 @@ export function CharacterScreen({ state, width, height, onCapture, onExit, activ
   const [useForm, setUseForm] = useState<{ itemId: number; form: FormState } | null>(null);
   const [setSel, setSetSel] = useState(0);
   const [setSwitch, setSetSwitch] = useState<EquipSet | null>(null);
+  const [setForm, setSetForm] = useState<FormState | null>(null);
+  const [setReplace, setSetReplace] = useState<EquipSet | null>(null);
 
   useEffect(() => {
     void (async () => {
@@ -138,8 +140,8 @@ export function CharacterScreen({ state, width, height, onCapture, onExit, activ
     })();
   }, [state]);
   useEffect(() => {
-    onCapture(filtering || confirm || !!useForm || !!setSwitch);
-  }, [filtering, confirm, useForm, setSwitch]);
+    onCapture(filtering || confirm || !!useForm || !!setSwitch || !!setForm || !!setReplace);
+  }, [filtering, confirm, useForm, setSwitch, setForm, setReplace]);
   useEffect(() => {
     if (tab === 'sets') {
       void state.loadEquipSets();
@@ -187,6 +189,35 @@ export function CharacterScreen({ state, width, height, onCapture, onExit, activ
         setUseForm(null);
         // biome-ignore lint/correctness/useHookAtTopLevel: state.useItem is a game action, not a React hook
         return void state.useItem(useForm.itemId, countValue);
+      }
+      if (setForm) {
+        const result = formKey(setForm, input, key);
+        if (result === 'cancel') {
+          return setSetForm(null);
+        }
+        if (result !== 'submit') {
+          return setSetForm(result);
+        }
+        const name = formValues(setForm).name ?? '';
+        setSetForm(null);
+        void state.saveEquipSet(name).then((savedId) => {
+          if (savedId === null) {
+            return;
+          }
+          const savedIndex = state.equipSets?.sets.findIndex((set) => set.id === savedId) ?? -1;
+          if (savedIndex >= 0) {
+            setSetSel(savedIndex);
+          }
+        });
+        return;
+      }
+      if (setReplace) {
+        const set = setReplace;
+        setSetReplace(null);
+        if (input === 'y') {
+          void state.replaceEquipSet(set.id);
+        }
+        return;
       }
       if (setSwitch) {
         const set = setSwitch;
@@ -272,16 +303,32 @@ export function CharacterScreen({ state, width, height, onCapture, onExit, activ
       }
       if (tab === 'sets') {
         const sets = state.equipSets?.sets ?? [];
-        const si = Math.min(setSel, Math.max(0, sets.length - 1));
+        const selectedIndex = Math.min(setSel, Math.max(0, sets.length - 1));
         if (up || key.pageUp) {
-          return setSetSel(Math.max(0, si - step));
+          return setSetSel(Math.max(0, selectedIndex - step));
         }
         if (down || key.pageDown) {
-          return setSetSel(Math.min(sets.length - 1, si + step));
+          return setSetSel(Math.min(sets.length - 1, selectedIndex + step));
         }
-        const set = sets[si];
-        if (key.return && set) {
-          setSetSwitch(set);
+        const selectedSet = sets[selectedIndex];
+        if (input === 'S') {
+          return setSetForm(
+            makeForm('Save current equipment', [
+              {
+                key: 'name',
+                label: 'Set name',
+                value: '',
+                hint: state.equipSets
+                  ? `${state.equipSets.sets.length}/${state.equipSets.hasPremium ? state.equipSets.premiumMax : state.equipSets.max} used`
+                  : 'loading sets',
+              },
+            ]),
+          );
+        }
+        if (input === 'R' && selectedSet) {
+          setSetReplace(selectedSet);
+        } else if (key.return && selectedSet) {
+          setSetSwitch(selectedSet);
         }
         return;
       }
@@ -372,7 +419,8 @@ export function CharacterScreen({ state, width, height, onCapture, onExit, activ
     state.items ? null : createElement(Text, { color: 'yellow' }, '   loading item data…'),
   );
 
-  const otherForm = useForm ? useForm.form.fields.length + 4 : 0;
+  const activeForm = useForm?.form ?? setForm;
+  const otherForm = activeForm ? activeForm.fields.length + 4 : 0;
   const body =
     tab === 'inventory'
       ? createElement(InventoryTab, {
@@ -391,7 +439,14 @@ export function CharacterScreen({ state, width, height, onCapture, onExit, activ
           clampScroll: (max: number) => setDetailScroll((countValue) => Math.min(countValue, max)),
         })
       : tab === 'sets'
-        ? createElement(SetsTab, { state, width, height: height - 1, selected: setSel, confirm: setSwitch })
+        ? createElement(SetsTab, {
+            state,
+            width,
+            height: height - 1 - otherForm,
+            selected: setSel,
+            confirm: setSwitch,
+            replace: setReplace,
+          })
         : createElement(SkillsTab, {
             state,
             width,
@@ -406,7 +461,7 @@ export function CharacterScreen({ state, width, height, onCapture, onExit, activ
     { flexDirection: 'column', width, height },
     tabs,
     body,
-    useForm ? createElement(FormView, { form: useForm.form, width }) : null,
+    activeForm ? createElement(FormView, { form: activeForm, width }) : null,
   );
 }
 
@@ -779,37 +834,39 @@ function SetsTab({
   height,
   selected,
   confirm,
+  replace,
 }: {
   state: GameState;
   width: number;
   height: number;
   selected: number;
   confirm: EquipSet | null;
+  replace: EquipSet | null;
 }) {
   const sets = state.equipSets?.sets ?? [];
-  const idx = Math.min(selected, Math.max(0, sets.length - 1));
-  const set = sets[idx];
-  const itemList = Math.max(30, Math.min(46, Math.floor(width * 0.35)));
-  const detailW = width - itemList;
+  const selectedIndex = Math.min(selected, Math.max(0, sets.length - 1));
+  const selectedSet = sets[selectedIndex];
+  const listWidth = Math.max(30, Math.min(46, Math.floor(width * 0.35)));
+  const detailWidth = width - listWidth;
   const listRows = Math.max(2, height - 4);
-  const [start, end] = scrollWindow(idx, sets.length, listRows);
-  const owned = (id: number) => state.inventory.isWorn(id) || state.inventory.count(id) > 0;
-  const worn = set
-    ? WEAR_SLOTS.filter((slot) => (set.slots[slot] ?? null) === (state.inventory.wear.get(slot) ?? null)).length
+  const [start, end] = scrollWindow(selectedIndex, sets.length, listRows);
+  const isOwned = (itemId: number) => state.inventory.isWorn(itemId) || state.inventory.count(itemId) > 0;
+  const wornCount = selectedSet
+    ? WEAR_SLOTS.filter((slot) => (selectedSet.slots[slot] ?? null) === (state.inventory.wear.get(slot) ?? null)).length
     : 0;
-  const left = createElement(
+  const leftPane = createElement(
     Box,
-    { flexDirection: 'column', borderStyle: 'round', borderColor: 'cyan', width: itemList, height, paddingX: 1 },
+    { flexDirection: 'column', borderStyle: 'round', borderColor: 'cyan', width: listWidth, height, paddingX: 1 },
     createElement(
       Text,
       { bold: true, wrap: 'truncate' },
-      `Equipment sets  ${sets.length ? `${idx + 1}/${sets.length}` : '0'}`,
+      `Equipment sets  ${sets.length ? `${selectedIndex + 1}/${sets.length}` : '0'}`,
     ),
     createElement(
       Text,
       { dimColor: true, wrap: 'truncate' },
       state.equipSets
-        ? `maximum ${state.equipSets.hasPremium ? state.equipSets.premiumMax : state.equipSets.max} · u refresh`
+        ? `maximum ${state.equipSets.hasPremium ? state.equipSets.premiumMax : state.equipSets.max} · S save · R replace`
         : 'Loading…',
     ),
     ...sets.slice(start, end).map((source, innerIndex) => {
@@ -818,46 +875,50 @@ function SetsTab({
         Text,
         defined({
           key: source.id,
-          inverse: start + innerIndex === idx,
+          inverse: start + innerIndex === selectedIndex,
           color: full ? 'green' : undefined,
           wrap: 'truncate',
         }),
-        `${full ? '●' : '○'} ${truncate(source.name, itemList - 6)}`,
+        `${full ? '●' : '○'} ${truncate(source.name, listWidth - 6)}`,
       );
     }),
     sets.length === 0 && state.equipSets
-      ? createElement(
-          Text,
-          { dimColor: true, wrap: 'wrap' },
-          'No saved sets. Save them in the browser inventory for now.',
-        )
+      ? createElement(Text, { dimColor: true, wrap: 'wrap' }, 'No saved sets. Press S to save the current wear.')
       : null,
   );
-  const detail = createElement(
+  const detailPane = createElement(
     Box,
-    { flexDirection: 'column', borderStyle: 'round', borderColor: 'gray', width: detailW, height, paddingX: 1 },
-    set
-      ? createElement(Text, { bold: true, wrap: 'truncate' }, `${set.name} · ${worn}/${WEAR_SLOTS.length} worn`)
+    { flexDirection: 'column', borderStyle: 'round', borderColor: 'gray', width: detailWidth, height, paddingX: 1 },
+    selectedSet
+      ? createElement(
+          Text,
+          { bold: true, wrap: 'truncate' },
+          `${selectedSet.name} · ${wornCount}/${WEAR_SLOTS.length} worn`,
+        )
       : createElement(Text, { bold: true }, 'No set selected'),
-    set
+    selectedSet
       ? createElement(
           Text,
           { dimColor: true, wrap: 'truncate' },
           'Enter switches. Items you wear now go back to the bag.',
         )
       : null,
-    ...(set
+    ...(selectedSet
       ? WEAR_SLOTS.map((slot) => {
-          const want = set.slots[slot] ?? null;
-          const current = state.inventory.wear.get(slot) ?? null;
-          const same = want === current;
+          const wantedId = selectedSet.slots[slot] ?? null;
+          const currentId = state.inventory.wear.get(slot) ?? null;
+          const same = wantedId === currentId;
           return createElement(
             Text,
-            defined({ key: slot, color: same ? 'green' : want && !owned(want) ? 'red' : undefined, wrap: 'truncate' }),
-            `${(SLOT_NAMES[slot] ?? slot).padEnd(12)} ${want === null ? '—' : state.itemName(want)}`,
-            want && !owned(want) ? '  (not in bag)' : '',
-            !same && current !== null
-              ? createElement(Text, { dimColor: true }, `  now ${state.itemName(current)}`)
+            defined({
+              key: slot,
+              color: same ? 'green' : wantedId && !isOwned(wantedId) ? 'red' : undefined,
+              wrap: 'truncate',
+            }),
+            `${(SLOT_NAMES[slot] ?? slot).padEnd(12)} ${wantedId === null ? '—' : state.itemName(wantedId)}`,
+            wantedId && !isOwned(wantedId) ? '  (not in bag)' : '',
+            !same && currentId !== null
+              ? createElement(Text, { dimColor: true }, `  now ${state.itemName(currentId)}`)
               : '',
           );
         })
@@ -865,9 +926,19 @@ function SetsTab({
     createElement(Box, { flexGrow: 1 }),
     confirm
       ? createElement(Text, { color: 'yellow', wrap: 'truncate' }, `Switch to ${confirm.name}? y / n`)
-      : createElement(Text, { dimColor: true, wrap: 'truncate' }, 'Enter switch · ↑↓ set · u refresh · Esc back'),
+      : replace
+        ? createElement(
+            Text,
+            { color: 'yellow', wrap: 'truncate' },
+            `Replace ${replace.name} with the current wear? y / n`,
+          )
+        : createElement(
+            Text,
+            { dimColor: true, wrap: 'truncate' },
+            'Enter switch · S save · R replace · ↑↓ set · u refresh',
+          ),
   );
-  return createElement(Box, null, left, detail);
+  return createElement(Box, null, leftPane, detailPane);
 }
 
 function SkillsTab(pick: {

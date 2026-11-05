@@ -56,6 +56,27 @@ browser client's code; **unverified** = assumed, check live and update this file
   `{deposit, own_money, fee}`. No withdrawal: purchases take cash first, then the bank. You must be in the town.
 - Cash in pocket can be lost in duels; that is why the autopilot banks over a limit.
 
+## Daily login bonus
+
+- `game.php?window=loginbonus` (no mode) → `{couponAmount, nuggetAmount, currentStage, rewardCollected,
+  itemCollected, registerDate, weaponShot, weaponMelee}` (LoginBonus.init @621917). `currentStage` is the 1-based
+  day in the five-day streak; `rewardCollected` says whether today's reward is still available.
+- `loginbonus/collect` → `{rewards:{xp?, nuggets?, upb?}}`; `loginbonus/collect_item` is the separate 7-day
+  registered-user delivery (not used by the TUI). The TUI checks `Player.hasLoginBonus` on startup and collects
+  once; `daily bonus pending` stays in the header only if collection failed. There is no bonus page.
+
+## Seasonal events
+
+- `Game.init.sesData.<Event>` carries the **personal** event progress: `counter.value` and `counter.key`
+  (`ses:<id>_collected`), the reward thresholds in `rewards` (`{<points>:{id, desc}}`), and `meta.end`.
+  `ceData.<event id>` carries the display name, event stages and community progress. Verified from the saved
+  en32 bootstrap.
+- The browser updates the counter live through `SesStatChanged {<stat>: value}` (keys get a `ses:` prefix).
+- Event generator items are ordinary `usetype: 'use'` items whose description says
+  "Generates <amount> <currency> for the <event> event … once every <hours>". Examples: Flower pot (1250 every
+  11.5 h) and Big Flower pot (2500 every 23 h). Their cooldowns are in `Bag.init.itemCooldown` (epoch seconds)
+  and expiry in `itemLifetime` (seconds); `itemuse/use_item` replies update both.
+
 ## Town buildings and construction
 
 - `building_cityhall` action '' `{town_id}` → `{townName, townNoLeave, buildings:[{key, name, stage, maxStage,
@@ -83,8 +104,10 @@ browser client's code; **unverified** = assumed, check live and update this file
   right_arm, left_arm, yield, foot, animal, belt, pants}], max, premium_max, hasPremium, price}` (verified live,
   en32: two sets, max 3). `inventory/switch_equip {id, last_inv_id}` → `{changes, wear:[item ids], setItems,
   workPointBonus, speed, weapon}`; `wear` is the complete new worn list (the list endpoint is verified live; the
-  switch shape is from `EquipManager.switchEquip`). Save / replace / delete are `save_equip` / `replace_equip` /
-  `delete_equip`, not used by the TUI yet.
+  switch shape is from `EquipManager.switchEquip`).
+- `inventory/save_equip {name}` saves the current wear as a new set and returns it under `data`;
+  `inventory/replace_equip {id}` overwrites that set with the current wear. Delete (`delete_equip`) stays
+  browser-only. The browser caps sets at `max` (3 without automation, `premium_max` with it).
 
 ## Mobile trader
 

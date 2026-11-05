@@ -110,6 +110,7 @@ const SHORTCUTS: Record<Mode | 'global', [string, string][]> = {
     ['U', '(bag) use item: drinks, buffs, bags…'],
     ['Enter  x', '(equipped) take off'],
     ['Enter', '(sets) switch equipment set (y)'],
+    ['S  R', '(sets) save current wear · replace selected set (y)'],
     ['/  t y', 'search bag · cycle item type'],
     ['+  -', '(skills) plan a point'],
     ['Enter', '(skills) save planned points (y)'],

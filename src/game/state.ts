@@ -19,6 +19,7 @@ import { CharacterState, type Position } from './character.ts';
 import { ServerClock } from './clock.ts';
 import { DebugLog, diffSnapshots } from './debug-log.ts';
 import { DuelApi, type DuelData, type DuelOpponent, duelPost, type NpcDuelResult } from './duels.ts';
+import { type ActiveEvent, type EventItem, eventReadyItems, parseActiveEvent, withEventPoints } from './event.ts';
 import { fetchHotel, type Hotel, type HotelRoom, roomRate } from './hotel.ts';
 import { type EquipSets, Inventory, InventoryApi } from './inventory.ts';
 import { baseId, type ItemCatalog, type ItemSetCatalog, loadItemCatalog, loadItemSets, statsOf } from './items.ts';
@@ -37,6 +38,7 @@ import {
   parseJobDetail,
   wayTime,
 } from './jobs.ts';
+import { collectLoginBonus, loginRewardText } from './loginbonus.ts';
 import {
   MailApi,
   type Report,
@@ -209,6 +211,10 @@ export class GameState extends EventEmitter {
   inventory = new Inventory();
   /** Saved equipment sets (loaded by the character screen's Sets tab). */
   equipSets: EquipSets | null = null;
+  /** Player.hasLoginBonus from game.php; true while today's streak reward is uncollected. */
+  hasLoginBonus = false;
+  /** Active seasonal event and its personal progress (Game.init sesData/ceData). */
+  event: ActiveEvent | null = null;
   skills = new Skills();
   quests: Quest[] = [];
   questCapacity = 0;
@@ -287,6 +293,8 @@ export class GameState extends EventEmitter {
     this.bagInit = bootstrap.bag ?? (isObj(inventory) ? inventory : null);
     this.inventory = Inventory.fromInit(this.bagInit, this.items ?? undefined);
     this.equipSets = null;
+    this.hasLoginBonus = !!bootstrap.player?.hasLoginBonus;
+    this.event = parseActiveEvent(bootstrap.game);
     this.mobileTrader = null;
     this.townHall = null;
     this.construction = null;
@@ -633,6 +641,7 @@ export class GameState extends EventEmitter {
     }
     this.startup.done = true;
     this.info(`Ready: ${this.jobs.length} jobs, ${this.items?.size ?? 0} items, ${this.quests.length} quests.`);
+    void this.autoCollectLoginBonus();
   }
 
   /** Leaves the loading screen early (requests keep running in the background). */
@@ -693,6 +702,7 @@ export class GameState extends EventEmitter {
       this.character.nuggets = countValue;
       this.changed();
     });
+    poller.on('ses', (stats) => this.applySesStats(stats));
     poller.on('tell', ({ from, message }: { from: string; message: string }) => this.info(`✉ ${from}: ${message}`));
     poller.on('chat', () => this.changed());
     poller.on('rooms', () => this.changed());
@@ -780,6 +790,9 @@ export class GameState extends EventEmitter {
     this.syncing = true;
     try {
       const { bootstrap } = await this.reopen();
+      this.hasLoginBonus = !!bootstrap.player?.hasLoginBonus;
+      this.inventory.setItemMeta(bootstrap.bag?.itemCooldown, bootstrap.bag?.itemLifetime);
+      this.event = parseActiveEvent(bootstrap.game);
       const data = bootstrap.character;
       if (!data) {
         return;
@@ -951,6 +964,95 @@ export class GameState extends EventEmitter {
     if (ok) {
       await this.afterGearChange();
     }
+  }
+
+  /** Saves the current wear as a new equipment set and returns its id when the server sends one. */
+  async saveEquipSet(name: string): Promise<number | null> {
+    const trimmedName = name.trim();
+    if (!trimmedName) {
+      this.error('Give the equipment set a name.');
+      return null;
+    }
+    const maximum = this.equipSets?.hasPremium ? this.equipSets.premiumMax : this.equipSets?.max;
+    if (maximum && this.equipSets && this.equipSets.sets.length >= maximum) {
+      this.error(`No free equipment-set slot (${this.equipSets.sets.length}/${maximum}).`);
+      return null;
+    }
+    const saved = await this.guard('Save equipment set', async () => {
+      const set = await new InventoryApi(this.client).saveEquip(trimmedName);
+      this.info(`Saved equipment set: ${trimmedName}`);
+      return set ?? true;
+    });
+    if (saved === undefined) {
+      return null;
+    }
+    await this.loadEquipSets();
+    return typeof saved === 'object'
+      ? saved.id || null
+      : (this.equipSets?.sets.find((set) => set.name === trimmedName)?.id ?? null);
+  }
+
+  /** Replaces a saved set with the current wear. */
+  async replaceEquipSet(id: number): Promise<boolean> {
+    const set = this.equipSets?.sets.find((source) => source.id === id);
+    if (!set) {
+      this.error('That equipment set is no longer available.');
+      return false;
+    }
+    const replaced = await this.guard('Replace equipment set', async () => {
+      await new InventoryApi(this.client).replaceEquip(id);
+      this.info(`Replaced equipment set: ${set.name}`);
+      return true;
+    });
+    if (replaced) {
+      await this.loadEquipSets();
+    }
+    return !!replaced;
+  }
+
+  /** Collects today's reward and refreshes the character (XP/nuggets) and the streak. */
+  async collectLoginReward(): Promise<void> {
+    const rewards = await this.guard('Collect login bonus', async () => {
+      const result = await collectLoginBonus(this.client);
+      const text = loginRewardText(result);
+      this.info(`Daily login bonus${text ? `: ${text}` : ' collected'}`);
+      return result;
+    });
+    if (!rewards) {
+      return;
+    }
+    this.hasLoginBonus = false;
+    await this.syncCharacter('login bonus');
+  }
+
+  /** Startup hook: collect the free daily reward once when the bootstrap says it is available. */
+  async autoCollectLoginBonus(): Promise<void> {
+    if (!this.hasLoginBonus) {
+      return;
+    }
+    await this.collectLoginReward();
+  }
+
+  /** Event generator items whose cooldown is over (header reminders). */
+  eventReadyItems(): EventItem[] {
+    return eventReadyItems(this.inventory, this.items, this.event, this.clock.now());
+  }
+
+  /** Live SesStatChanged: update the personal event counter without a full reload. */
+  private applySesStats(stats: JsonObject): void {
+    if (!this.event) {
+      return;
+    }
+    for (const [key, value] of entries(stats)) {
+      if (`ses:${key}` !== this.event.counterKey) {
+        continue;
+      }
+      const points = Number(value);
+      if (Number.isFinite(points)) {
+        this.event = withEventPoints(this.event, points);
+      }
+    }
+    this.changed();
   }
 
   async wear(itemId: number): Promise<void> {
@@ -2268,6 +2370,12 @@ export class GameState extends EventEmitter {
         this.itemName(id),
       );
       this.inventory.applyChanges(resultValue.changes);
+      if (resultValue.itemCooldown !== undefined) {
+        this.inventory.itemCooldown.set(itemId, resultValue.itemCooldown);
+      }
+      if (resultValue.itemLifetime !== undefined) {
+        this.inventory.itemLifetime.set(itemId, resultValue.itemLifetime);
+      }
       if (resultValue.energy !== undefined) {
         this.character.setEnergy(resultValue.energy);
       }
