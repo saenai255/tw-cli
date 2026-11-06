@@ -161,10 +161,9 @@ export class AutopilotRunner {
   private hotelOptions(): HotelOption[] {
     const gameState = this.state;
     const named = gameState.world.towns.filter((townInfo) => townInfo.name);
+    const way = (town: { x: number; y: number }) => gameState.travelTo(town) ?? Number.POSITIVE_INFINITY;
     const near = named.length
-      ? named.reduce((accumulator, current) =>
-          gameState.travelTo(current) < gameState.travelTo(accumulator) ? current : accumulator,
-        )
+      ? named.reduce((accumulator, current) => (way(current) < way(accumulator) ? current : accumulator))
       : undefined;
     const ids = [
       ...new Set([gameState.character.homeTown?.id, near?.id].filter((xCoord): xCoord is number => !!xCoord)),
@@ -329,7 +328,8 @@ export class AutopilotRunner {
     return {
       start: {
         now: gameState.clock.now(),
-        at: character.position,
+        // The queue end when the queue is not empty (fixed steps override it), else the live position.
+        at: gameState.queueEnd ?? character.position,
         energy: Math.min(character.maxEnergy, character.energy + energyBonus),
         maxEnergy: character.maxEnergy,
         health: character.health,
@@ -372,13 +372,13 @@ export class AutopilotRunner {
   context(): Record<string, unknown> {
     const gameState = this.state;
     const character = gameState.character;
-    const way = (to: { x: number; y: number }) =>
-      Math.round(wayTime(character.position, to, gameState.travelSpeed, character.speed));
+    const home = character.homeTown;
+    const from = gameState.queueEnd ?? (home ? { x: home.x, y: home.y } : character.position);
+    const way = (to: { x: number; y: number }) => Math.round(wayTime(from, to, gameState.travelSpeed, character.speed));
     const named = gameState.world.towns.filter((townInfo) => townInfo.name);
     const nearest = named.length
       ? named.reduce((accumulator, current) => (way(current) < way(accumulator) ? current : accumulator))
       : undefined;
-    const home = character.homeTown;
     const homeTown = home ? gameState.world.towns.find((townInfo) => townInfo.id === home.id) : undefined;
     const needs = gameState.autopilotNeeds();
     return {
@@ -388,9 +388,9 @@ export class AutopilotRunner {
         ? { name: homeTown?.name ?? `town ${home.id}`, at: { x: home.x, y: home.y }, seconds: way(home) }
         : null,
       nearestTown: nearest ? { name: nearest.name, at: { x: nearest.x, y: nearest.y }, seconds: way(nearest) } : null,
-      position: character.position,
+      position: character.positionKnown ? character.position : null,
       townHere: gameState.townHere?.name ?? null,
-      queueEnd: gameState.queueEndPosition,
+      queueEnd: gameState.queueEnd,
       quests: gameState.quests.map((quest) => ({
         id: quest.id,
         title: quest.title,
@@ -592,6 +592,17 @@ export class AutopilotRunner {
       return;
     }
     if (this.acting || gameState.busy) {
+      return;
+    }
+    // No plan until a real position is known (Character.init.pos can be 0,0): planning from the map origin
+    // sends the character to the first county. The live poller or a queued task will provide one.
+    if (!gameState.queueEnd) {
+      if (this.plan) {
+        this.plan = null;
+        this.stale = false;
+        gameState.updateAutopilot((autopilotFile) => (autopilotFile.plan = null));
+      }
+      gameState.debug.once('position', 'autopilot', 'Waiting for the character position');
       return;
     }
     const now = Date.now();

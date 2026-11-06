@@ -10,6 +10,17 @@ export interface Position {
 }
 
 /**
+ * Whether a map position is real. `pos`/task coords can arrive as `{x:0,y:0}` when the server has none yet
+ * (no position in the session, an idle character, a task without coords); the map origin is not a place a
+ * character stands, so (0,0) means "unknown" here too.
+ */
+export function isUsablePosition(position: Position | null | undefined): position is Position {
+  const x = Number(position?.x);
+  const y = Number(position?.y);
+  return Number.isFinite(x) && Number.isFinite(y) && (x !== 0 || y !== 0);
+}
+
+/**
  * Total XP at which `level` starts (Character.calcLowerExp @717300): floor((Σk² for k≤level + 10·(level+1) − 21) · 3)
  * plus 1000·(level − 120)^2.9 above level 120; capped at the world's max level.
  */
@@ -57,6 +68,8 @@ export class CharacterState {
   deposit = 0;
   nuggets = 0;
   position: Position = { x: 0, y: 0 };
+  /** Whether `position` is a real map position; false until the server, a live update or a task provides one. */
+  positionKnown = false;
   homeTown: { id: number; x: number; y: number } | null = null;
   /** Character.speed (charSpeed): multiplies travel time. */
   speed = 1;
@@ -98,7 +111,7 @@ export class CharacterState {
     character.deposit = Number(data.deposit);
     character.nuggets = Number(data.nuggets);
     const pos = obj(data.pos);
-    character.position = { x: Number(pos.x ?? 0), y: Number(pos.y ?? 0) };
+    character.setPosition({ x: Number(pos.x), y: Number(pos.y) });
     const town = isObj(data.town) ? data.town : null;
     character.homeTown = town
       ? { id: Number(town.id), x: Number(obj(town.coords).x), y: Number(obj(town.coords).y) }
@@ -123,6 +136,16 @@ export class CharacterState {
     character.setHealth(Number(data.health));
     character.setEnergy(Number(data.energy));
     return character;
+  }
+
+  /** Sets a real map position; false (and no change) when the value is missing or the (0,0) sentinel. */
+  setPosition(position: Position | null | undefined): boolean {
+    if (!isUsablePosition(position)) {
+      return false;
+    }
+    this.position = { x: Number(position.x), y: Number(position.y) };
+    this.positionKnown = true;
+    return true;
   }
 
   /** `at`: server time (s) the value was measured (energy_date from live updates); default now. */

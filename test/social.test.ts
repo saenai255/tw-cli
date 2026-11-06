@@ -1879,6 +1879,7 @@ test('calibration hooks: HP lost after a dangerous job; queued sleeps keep their
       start: now - 3600,
       end: now - 1,
       coords: { x: 1, y: 1 },
+      coordsKnown: true,
       title: 'Hunting',
       jobId: 9,
       raw: {},
@@ -1890,7 +1891,16 @@ test('calibration hooks: HP lost after a dangerous job; queued sleeps keep their
   assert.equal(gameState.calibration.data.hp.observed, 20);
   assert.ok(gameState.debug.entries.some((entry) => /Calibration: Hunting cost 20 HP/.test(entry.title)));
   gameState.queue = [
-    { queueId: 6, type: 'sleep', start: now, end: now + 8 * 3600, coords: { x: 1, y: 1 }, title: 'Sleep', raw: {} },
+    {
+      queueId: 6,
+      type: 'sleep',
+      start: now,
+      end: now + 8 * 3600,
+      coords: { x: 1, y: 1 },
+      coordsKnown: true,
+      title: 'Sleep',
+      raw: {},
+    },
   ];
   gameState.sleepRates.set(6, { energyRate: 0.5, healthRate: 0.4 });
   const st = gameState.queuedStep(gameState.queue[0]!) as any;
@@ -1908,7 +1918,16 @@ test('live update: energy_date / health_date are offsets from now; queue time ji
   assert.ok(Math.abs(gameState.character.serverValues.healthAt - (now - 780)) < 2);
 
   gameState.queue = [
-    { queueId: 1, type: 'job', start: now, end: now + 3600.300001, coords: { x: 0, y: 0 }, title: 'job', raw: {} },
+    {
+      queueId: 1,
+      type: 'job',
+      start: now,
+      end: now + 3600.300001,
+      coords: { x: 0, y: 0 },
+      coordsKnown: true,
+      title: 'job',
+      raw: {},
+    },
   ];
   const result = gameState.runner as any;
   const print = () => JSON.stringify(result.inputs([]));
@@ -2104,6 +2123,32 @@ test('autopilot runner: queues what the energy covers, sleeps when out, wakes at
   assert.equal(gameState.character.cash, 0);
   assert.equal(gameState.character.deposit, 5010);
   assert.match(gameState.log.map((line) => line.msg).join('\n'), /deposited \$ 5000 \(fee \$ 50\)/);
+
+  // Unknown position: do not plan or send anything from the map origin; wait for the live position.
+  gameState.queue = [];
+  gameState.character.positionKnown = false;
+  gameState.character.position = { x: 0, y: 0 };
+  (gameState.runner as any).plan = null;
+  (gameState.runner as any).lastCheck = 0;
+  (gameState.runner as any).queueFullUntil = 0;
+  const beforeWait = calls.filter((candidate) => candidate.url.includes('action=add')).length;
+  await gameState.runner.step();
+  assert.equal(
+    calls.filter((candidate) => candidate.url.includes('action=add')).length,
+    beforeWait,
+    'nothing is queued from the unknown position',
+  );
+  assert.ok(
+    gameState.debug.entries.some((entry) => /Waiting for the character position/.test(entry.title)),
+    'the runner says why it waits',
+  );
+  gameState.applySelf({ x: 110, y: 100 });
+  (gameState.runner as any).lastCheck = 0;
+  await gameState.runner.step();
+  assert.ok(
+    calls.filter((candidate) => candidate.url.includes('action=add')).length > beforeWait,
+    'plans again once the live position is known',
+  );
 });
 
 test('job report: found items come from reportInfo.items (the page only has empty placeholders); list summary from img alts', async () => {

@@ -5,7 +5,7 @@ import React, { useEffect, useState } from 'react';
 import type { DuelNpc, DuelOpponent } from '../game/duels.ts';
 import { defined } from '../util/defined.ts';
 import type { ScreenProps } from './character.ts';
-import { formatDuration, scrollWindow, truncate } from './format.ts';
+import { formatDuration, formatTravel, scrollWindow, truncate } from './format.ts';
 
 const createElement = React.createElement;
 
@@ -117,7 +117,7 @@ export function DuelsScreen({ state, width, height, onCapture, onExit, active = 
       return createElement(
         Text,
         { key: `p${result.o.playerId}`, inverse: count === idx, wrap: 'truncate' },
-        `  ${truncate(result.o.name, leftW - 24)} L${String(result.o.duelLevel).padStart(3)} ${formatDuration(state.travelTo(result.o)).padStart(8)}`,
+        `  ${truncate(result.o.name, leftW - 24)} L${String(result.o.duelLevel).padStart(3)} ${formatTravel(state.travelTo(result.o)).padStart(8)}`,
       );
     }),
     !duels ? createElement(Text, { dimColor: true }, 'Loading…') : null,
@@ -141,7 +141,7 @@ export function DuelsScreen({ state, width, height, onCapture, onExit, active = 
       createElement(
         Text,
         { key: 'w', dimColor: true, wrap: 'truncate' },
-        `at ${selected.o.x},${selected.o.y} · ${formatDuration(state.travelTo(selected.o))} walk (the duel task walks there)`,
+        `at ${selected.o.x},${selected.o.y} · ${formatTravel(state.travelTo(selected.o))} walk (the duel task walks there)`,
       ),
     );
   }

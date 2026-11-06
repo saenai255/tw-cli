@@ -4,7 +4,7 @@ import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { CONFIG_DIR } from '../auth/session-store.ts';
 import { arr, isObj, type JsonObject, obj } from '../util/json.ts';
-import type { Position } from './character.ts';
+import { isUsablePosition, type Position } from './character.ts';
 import { type JobDetail, parseJobDetail, type SpecialKind } from './jobs.ts';
 import type { SpecialJob } from './tiles.ts';
 
@@ -58,6 +58,7 @@ export function loadSpecialJobs(worldUrl: string): { jobs: SpecialJob[]; details
       const silver = !!entry.silver;
       if (
         ![x, y, jobId, groupId, seenAt].every(Number.isFinite) ||
+        !isUsablePosition({ x, y }) ||
         Date.now() - seenAt > SPECIAL_CACHE_TTL_MS ||
         (!gold && !silver)
       ) {

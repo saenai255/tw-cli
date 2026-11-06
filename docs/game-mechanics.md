@@ -13,6 +13,11 @@ browser client's code; **unverified** = assumed, check live and update this file
   no date (now). `CharacterState` regenerates locally from the last server value. Verified (debug log, en32).
 - Queue `date_start` / `date_done` come back with sub-ms differences between polls (clock offset): round them
   before comparing.
+- **Position**: `Character.init.pos` and a task's `coords` can be `{x:0,y:0}` when the server has none yet (fresh
+  session, idle character, a task type that does not carry coords). The map origin is never a real character
+  position, so the CLI treats missing/`(0,0)` as unknown and waits for a live `UserUpdate` or a queued task
+  instead of planning from it; a `build` task without coords is at the home town. Which session states return
+  `(0,0)` is unverified; the debug log records the raw `pos` at startup and when it becomes known.
 - Max HP: `100 + (level − 1)·lpPerPoint + healthSkill·(lpPerPoint + lpPerPointBonus)` (`calcMaxHealth`). Verified.
 - **Jobs pay their energy when queued** (task/add reply may carry the new `energy`; if it does not, subtract
   locally). Cancelling a queued job refunds it. Verified for queued; running-job refund unverified.
@@ -26,8 +31,10 @@ browser client's code; **unverified** = assumed, check live and update this file
   job `{jobId, x, y, duration, taskType:'job'}` · walk `{unitId, type, x?, y?, taskType:'walk'}` (type `town`,
   `fort`, `questgiver`) · sleep `{town_id, room, taskType:'sleep'}` (the server walks there first).
 - `task/cancel {tasks: {<pos>: {queueId, type}}}` returns the new queue (+ `extra.energy` / `extra.money`).
-- Queue entries carry `date_start` / `date_done` (epoch s), coords, `wayData` (the walk part). They do **not**
-  say which duration a job was: infer from `date_done − way end` vs the job's short/middle/long values.
+- Queue entries carry `date_start` / `date_done` (epoch s), coords, `wayData` (the walk part). Coords can be
+  missing (`(0,0)`) on some task types; a `build` task is at the home town, otherwise the walk destination is used
+  when present. They do **not** say which duration a job was: infer from `date_done − way end` vs the job's
+  short/middle/long values.
 - Queue limit: `taskLimit.normal` (4) / `.premium` (9, with the automation premium bonus).
 
 ## Jobs

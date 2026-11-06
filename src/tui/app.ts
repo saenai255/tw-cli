@@ -109,7 +109,11 @@ function Header({ state }: { state: GameState }) {
       xpText(character),
       createElement(Text, { color: 'green' }, money(character.cash)),
       ` bank ${money(character.deposit)}   `,
-      createElement(Text, { dimColor: true }, `pos ${character.position.x},${character.position.y}`),
+      createElement(
+        Text,
+        { dimColor: true },
+        `pos ${character.positionKnown ? `${character.position.x},${character.position.y}` : '?'}`,
+      ),
       state.lastSync
         ? createElement(
             Text,
@@ -230,7 +234,7 @@ function JobsPane(props: {
   showAll: boolean;
 }) {
   const { state, options, selected, focused, height, width, filter, filtering, sort, showAll } = props;
-  const listHeight = Math.max(3, height - 5);
+  const listHeight = Math.max(3, height - (state.queueEnd ? 5 : 6));
   const [start, end] = scrollWindow(selected, options.length, listHeight);
   const luck = sort === 'luck';
   // Inner width − marker − LP and travel (with spaces) − luck − xp and $.
@@ -261,6 +265,13 @@ function JobsPane(props: {
       `sort: ${SORT_LABEL[sort]} (S) · ${showAll ? 'all jobs' : 'enough LP only'} (a) · xp/$ for the longest run${quest?.size ? ` · ! ${state.mapHighlight?.label ?? ''}` : ''}`,
     ),
     createElement(Text, { dimColor: true, wrap: 'truncate' }, head),
+    !state.queueEnd
+      ? createElement(
+          Text,
+          { key: 'wait', color: 'yellow', wrap: 'truncate' },
+          'waiting for the character position · travel unknown',
+        )
+      : null,
     ...options.slice(start, end).map((optionsValue, index) => {
       const idx = start + index;
       const sel = idx === selected;
@@ -428,7 +439,10 @@ export function App({
   const [jobSort, setJobSort] = useState<JobSort>('name');
   const [showAllJobs, setShowAllJobs] = useState(false);
   const [confirmCancel, setConfirmCancel] = useState(false);
-  const [view, setView] = useState<MapView>(() => ({ ...state.character.position, zoom: 128 }));
+  const [view, setView] = useState<MapView>(() => ({
+    ...(state.character.positionKnown ? state.character.position : state.queueEndPosition),
+    zoom: 128,
+  }));
   const [mapPanel, setMapPanel] = useState(false);
   const [mapSel, setMapSel] = useState(0);
   const [search, setSearch] = useState('');
@@ -497,6 +511,11 @@ export function App({
       state.world,
       state.items,
       state.queue.length,
+      state.queueEnd?.x,
+      state.queueEnd?.y,
+      state.character.positionKnown,
+      state.character.position.x,
+      state.character.position.y,
       filter,
       jobSort,
       showAllJobs,
@@ -861,6 +880,9 @@ export function App({
         }));
       }
       if (input === '.' || input === 'c') {
+        if (!state.character.positionKnown) {
+          return;
+        }
         return setView((value) => ({ ...value, ...state.character.position }));
       }
       if (input === 'e') {

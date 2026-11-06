@@ -7,6 +7,9 @@ Ink (React without JSX: `const h = React.createElement`). Shell in `src/tui/app.
 - `Root` connects (`ensureGame`) and shows `LoadingFrame` with a running "Connecting to The West" step; the
   connect time is passed to `GameState.start({ connect })`, which lists it as the first, finished loading step.
 - `LoadingScreen` (in `App`) shows `state.startup.steps` until `startup.done` (Esc skips).
+- Until a real position is known (the game page can give `pos` 0,0), the header shows `pos ?`, jobs list without
+  locations and `travel —` with a "waiting for the character position" hint, and the autopilot waits instead of
+  planning from the map origin.
 
 ## Keys
 

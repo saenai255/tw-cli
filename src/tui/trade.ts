@@ -18,7 +18,7 @@ import {
 import { defined } from '../util/defined.ts';
 import { ItemDetail, type ScreenProps } from './character.ts';
 import { type FormField, type FormState, FormView, formKey, formValues, makeForm } from './form.ts';
-import { coarseDuration, formatDuration, money, scrollWindow, truncate } from './format.ts';
+import { coarseDuration, formatTravel, money, scrollWindow, truncate } from './format.ts';
 
 const createElement = React.createElement;
 
@@ -885,7 +885,7 @@ function offerDetail(state: ScreenProps['state'], offer: MarketOffer, width: num
     createElement(
       Text,
       { key: 't', dimColor: true, wrap: 'truncate' },
-      `${offer.finished ? 'Ended' : `Ends in ${coarseDuration(offer.endsIn)}`} · at ${offer.town.name} (${formatDuration(way)} away)`,
+      `${offer.finished ? 'Ended' : `Ends in ${coarseDuration(offer.endsIn)}`} · at ${offer.town.name} (${formatTravel(way)} away)`,
     ),
   ];
   return createElement(

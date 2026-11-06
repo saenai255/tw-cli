@@ -15,7 +15,7 @@ import { type BuyTrip, expectedHpLoss } from './autopilot.ts';
 import { type AutopilotFile, loadAutopilot, questInScope, saveAutopilot } from './autopilot-config.ts';
 import { AutopilotRunner } from './autopilot-runner.ts';
 import { Calibration } from './calibration.ts';
-import { CharacterState, type Position } from './character.ts';
+import { CharacterState, isUsablePosition, type Position } from './character.ts';
 import { ServerClock } from './clock.ts';
 import { DebugLog, diffSnapshots } from './debug-log.ts';
 import { DuelApi, type DuelData, type DuelOpponent, duelPost, type NpcDuelResult } from './duels.ts';
@@ -303,7 +303,16 @@ export class GameState extends EventEmitter {
     const game = bootstrap.game ?? {};
     const str = (value: unknown) => (typeof value === 'string' ? value : undefined);
     this.clock = new ServerClock(game.sincepoch === undefined ? undefined : Number(game.sincepoch));
+    const previousPosition = this.character?.positionKnown ? this.character.position : null;
+    const pagePosition = {
+      x: Number(obj(bootstrap.character?.pos).x),
+      y: Number(obj(bootstrap.character?.pos).y),
+    };
     this.character = CharacterState.fromInit(bootstrap.character ?? {}, this.clock);
+    // A game.php without pos (or an idle session the server gives no position) must not reset a known one.
+    if (!this.character.positionKnown && previousPosition) {
+      this.character.setPosition(previousPosition);
+    }
     if (Number(game.maxLevel) > 0) {
       this.character.maxLevel = Number(game.maxLevel);
     }
@@ -313,6 +322,19 @@ export class GameState extends EventEmitter {
     this.worldName = String(game.currentWorldName ?? '');
     this.automationUntil = Number(obj(obj(obj(bootstrap.premium).premiumBoni).automation).expiration ?? 0);
     this.queue = parseQueue(bootstrap.character?.taskQueue);
+    this.debug.add(
+      'state',
+      isUsablePosition(pagePosition)
+        ? 'Character position from game.php'
+        : this.character.positionKnown
+          ? 'Character position missing in game.php: keeping the last known one'
+          : 'Character position missing in game.php: waiting for a live update or a queued task',
+      {
+        pos: obj(bootstrap.character?.pos),
+        position: this.character.positionKnown ? this.character.position : null,
+        queue: this.queue.length,
+      },
+    );
     this.itemsFile = str(game.itemsFile);
     this.itemSetsFile = str(game.itemSetsFile);
     const inventory = bootstrap.character?.inventory;
@@ -418,13 +440,15 @@ export class GameState extends EventEmitter {
 
   /** Doable jobs of one map location's job group, with travel from where the queue ends. */
   jobsAtLocation(groupId: number, at: { x: number; y: number }): JobOption[] {
-    const from = this.queueEndPosition;
-    const way = wayTime(from, at, this.travelSpeed, this.character.speed);
+    const from = this.queueEnd;
+    const way = from ? wayTime(from, at, this.travelSpeed, this.character.speed) : null;
     return this.jobs.filter((jobInfo) => jobInfo.groupid === groupId).map((job) => ({ job, at, way }));
   }
 
-  travelTo(at: { x: number; y: number }): number {
-    return wayTime(this.queueEndPosition, at, this.travelSpeed, this.character.speed);
+  /** Walking time from the queue end; null while no usable position is known. */
+  travelTo(at: { x: number; y: number }): number | null {
+    const from = this.queueEnd;
+    return from ? wayTime(from, at, this.travelSpeed, this.character.speed) : null;
   }
 
   get hasAutomation(): boolean {
@@ -435,10 +459,28 @@ export class GameState extends EventEmitter {
     return this.hasAutomation ? this.character.taskLimit.premium : this.character.taskLimit.normal;
   }
 
-  /** Where the character will be once the current queue is done (jobs are queued sequentially). */
-  get queueEndPosition(): Position {
+  /**
+   * Where the character will be once the current queue is done, or null while no usable position is known.
+   * A build task without coords is at the home town; any other task without coords leaves the end unknown.
+   */
+  get queueEnd(): Position | null {
     const last = this.queue[this.queue.length - 1];
-    return last ? last.coords : this.character.position;
+    if (!last) {
+      return this.character.positionKnown ? this.character.position : null;
+    }
+    if (last.coordsKnown) {
+      return last.coords;
+    }
+    if (last.type === 'build' && this.character.homeTown) {
+      return { x: this.character.homeTown.x, y: this.character.homeTown.y };
+    }
+    return null;
+  }
+
+  /** Display fallback for map/quest screens: the queue end, else the home town (never the map origin). */
+  get queueEndPosition(): Position {
+    const home = this.character.homeTown;
+    return this.queueEnd ?? (home ? { x: home.x, y: home.y } : { x: 0, y: 0 });
   }
 
   /** Drops finished tasks locally (TaskQueueUi.tick) and moves the character to their coords. */
@@ -450,7 +492,13 @@ export class GameState extends EventEmitter {
       if (!done) {
         break;
       }
-      this.character.position = done.coords;
+      if (done.coordsKnown) {
+        const wasKnown = this.character.positionKnown;
+        this.character.setPosition(done.coords);
+        if (!wasKnown) {
+          this.debug.add('state', 'Character position from a finished task', { position: done.coords });
+        }
+      }
       this.info(`Finished: ${done.title}`);
       if (done.type === 'job') {
         this.rates.jobsDone++;
@@ -559,7 +607,7 @@ export class GameState extends EventEmitter {
     const character = this.character;
     const sv = character.serverValues;
     return {
-      position: `${character.position.x},${character.position.y}`,
+      position: character.positionKnown ? `${character.position.x},${character.position.y}` : '?',
       town: this.townHere?.name ?? null,
       level: character.level,
       experience: character.experience,
@@ -687,6 +735,9 @@ export class GameState extends EventEmitter {
     }
     this.startup.done = true;
     this.info(`Ready: ${this.jobs.length} jobs, ${this.items?.size ?? 0} items, ${this.quests.length} quests.`);
+    if (!this.queueEnd) {
+      this.info('Position not known yet: waiting for live updates or a queued task.');
+    }
     void this.autoCollectLoginBonus();
   }
 
@@ -782,12 +833,11 @@ export class GameState extends EventEmitter {
 
   applySelf(value: SelfUpdate): void {
     const character = this.character;
-    if (
-      value.x !== undefined &&
-      value.y !== undefined &&
-      (value.x !== character.position.x || value.y !== character.position.y)
-    ) {
-      character.position = { x: value.x, y: value.y };
+    if (value.x !== undefined && value.y !== undefined) {
+      const wasKnown = character.positionKnown;
+      if (character.setPosition({ x: value.x, y: value.y }) && !wasKnown) {
+        this.debug.add('state', 'Character position confirmed by live updates', { position: character.position });
+      }
     }
     const level = value.level;
     const leveled = level !== undefined && level > character.level;
@@ -857,7 +907,13 @@ export class GameState extends EventEmitter {
       character.cash = fresh.cash;
       character.deposit = fresh.deposit;
       character.nuggets = fresh.nuggets;
-      character.position = fresh.position;
+      if (fresh.positionKnown) {
+        character.setPosition(fresh.position);
+      } else if (character.positionKnown) {
+        this.debug.add('state', 'Character position missing in game.php: keeping the last known one', {
+          position: character.position,
+        });
+      }
       character.homeTown = fresh.homeTown;
       character.duelLevel = fresh.duelLevel;
       character.maxEnergy = fresh.maxEnergy;
@@ -1255,14 +1311,14 @@ export class GameState extends EventEmitter {
     if (req.jobId !== undefined) {
       found.push({ id: req.jobId, chance: null });
     }
-    const from = this.queueEndPosition;
+    const from = this.queueEnd;
     return found.flatMap(({ id, chance }) => {
       const job = this.jobs.find((jobInfo) => jobInfo.id === id);
       if (!job) {
         return [];
       }
-      const at = nearestLocation(this.locations.get(job.groupid), from);
-      return [{ job, at, way: at ? wayTime(from, at, this.travelSpeed, this.character.speed) : null, chance }];
+      const at = from ? nearestLocation(this.locations.get(job.groupid), from) : null;
+      return [{ job, at, way: from && at ? wayTime(from, at, this.travelSpeed, this.character.speed) : null, chance }];
     });
   }
 
@@ -1514,13 +1570,17 @@ export class GameState extends EventEmitter {
    * selected row through loadJobDetail.
    */
   async loadNextSpecialJob(): Promise<boolean> {
+    const from = this.queueEnd;
+    if (!from) {
+      return false;
+    }
     for (const special of this.tiles.specialJobs.values()) {
       const job = this.jobs.find((jobInfo) => jobInfo.id === special.jobId);
       if (!job || !isDoable(job)) {
         continue;
       }
       const at = { x: special.x, y: special.y };
-      if (wayTime(this.queueEndPosition, at, this.travelSpeed, this.character.speed) > SPECIAL_PREFETCH_TRAVEL) {
+      if (wayTime(from, at, this.travelSpeed, this.character.speed) > SPECIAL_PREFETCH_TRAVEL) {
         continue;
       }
       const key = this.specialKey(job.id, special);
@@ -1573,7 +1633,10 @@ export class GameState extends EventEmitter {
 
   /** Discovered special jobs with real values, for the autopilot planner. */
   specialJobOptions(): JobOption[] {
-    const from = this.queueEndPosition;
+    const from = this.queueEnd;
+    if (!from) {
+      return [];
+    }
     const out: JobOption[] = [];
     for (const special of this.tiles.specialJobs.values()) {
       const job = this.jobs.find((jobInfo) => jobInfo.id === special.jobId);
@@ -1631,7 +1694,7 @@ export class GameState extends EventEmitter {
    * `sort` orders by the 1 h values, best first.
    */
   jobOptions(filter = '', opts: { sort?: JobSort; showAll?: boolean } = {}): JobOption[] {
-    const from = this.queueEndPosition;
+    const from = this.queueEnd;
     const textValue = filter.trim().toLowerCase();
     const sort = opts.sort ?? 'name';
     const allowed = (jobInfo: JobInfo) =>
@@ -1643,8 +1706,8 @@ export class GameState extends EventEmitter {
     const list: JobOption[] = this.jobs
       .filter((jobInfo) => allowed(jobInfo) && matches(jobInfo, this.currentJobValues(jobInfo)))
       .map((job) => {
-        const at = nearestLocation(this.locations.get(job.groupid), from);
-        return { job, at, way: at ? wayTime(from, at, this.travelSpeed, this.character.speed) : null };
+        const at = from ? nearestLocation(this.locations.get(job.groupid), from) : null;
+        return { job, at, way: from && at ? wayTime(from, at, this.travelSpeed, this.character.speed) : null };
       });
     for (const special of this.tiles.specialJobs.values()) {
       const job = this.jobs.find((jobInfo) => jobInfo.id === special.jobId);
@@ -1658,7 +1721,7 @@ export class GameState extends EventEmitter {
         continue;
       }
       const at = { x: special.x, y: special.y };
-      const way = wayTime(from, at, this.travelSpeed, this.character.speed);
+      const way = from ? wayTime(from, at, this.travelSpeed, this.character.speed) : null;
       const normal = list.find((option) => option.job.id === job.id && option.at?.x === at.x && option.at?.y === at.y);
       if (normal) {
         normal.special = kind;
@@ -2207,6 +2270,8 @@ export class GameState extends EventEmitter {
   /** A server queue entry as a fixed timeline step; job rewards from the job's values for its duration. */
   queuedStep(taskInfo: QueuedTask): TimelineStep {
     const fixed = { start: taskInfo.start, end: taskInfo.end };
+    const home = this.character.homeTown;
+    const at = taskInfo.coordsKnown || !home || taskInfo.type !== 'build' ? taskInfo.coords : { x: home.x, y: home.y };
     if (taskInfo.type === 'job' && taskInfo.jobId !== undefined) {
       const searchQuery = this.queuedJob(taskInfo);
       const secs = taskInfo.end - (taskInfo.way?.end ?? taskInfo.start);
@@ -2214,7 +2279,7 @@ export class GameState extends EventEmitter {
         kind: 'job',
         title: taskInfo.title,
         jobId: taskInfo.jobId,
-        at: taskInfo.coords,
+        at,
         duration: secs,
         energy: 0,
         xp: searchQuery?.values.experience ?? 0,
@@ -2228,13 +2293,13 @@ export class GameState extends EventEmitter {
       return {
         kind: 'sleep',
         title: taskInfo.title,
-        at: taskInfo.coords,
+        at,
         energyRate: entry?.energyRate ?? this.character.energyRegen,
         healthRate: entry?.healthRate ?? this.character.healthRegen,
         fixed,
       };
     }
-    return { kind: 'walk', title: taskInfo.title, at: taskInfo.coords, fixed };
+    return { kind: 'walk', title: taskInfo.title, at, fixed };
   }
 
   /** Projection of the server queue followed by `planned` steps, from now. */

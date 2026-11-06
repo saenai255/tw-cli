@@ -8,7 +8,7 @@ import { distance, isDoable } from '../game/jobs.ts';
 import type { GameState, JobOption } from '../game/state.ts';
 import { type Fort, type Town, WORLD_H, WORLD_W } from '../game/world.ts';
 import { defined } from '../util/defined.ts';
-import { formatDuration, money, truncate } from './format.ts';
+import { formatTravel, money, truncate } from './format.ts';
 
 const createElement = React.createElement;
 
@@ -214,7 +214,9 @@ export function buildGrid(state: GameState, view: MapView, cols: number, rows: n
       put(at, { ch: '!', prio: 9.5, color: 'magentaBright', bold: true });
     }
   }
-  put(state.character.position, { ch: '@', prio: 11, color: 'green', bold: true });
+  if (state.character.positionKnown) {
+    put(state.character.position, { ch: '@', prio: 11, color: 'green', bold: true });
+  }
 
   // Collapse runs of equal style into segments; cursor cell is inverse.
   return grid.map((row, rowIndex) => {
@@ -442,7 +444,7 @@ export function MapScreen(pick: MapScreenProps) {
       createElement(
         Text,
         { dimColor: true, wrap: 'truncate' },
-        `travel ${formatDuration(state.travelTo(centre))} from queue end`,
+        `travel ${formatTravel(state.travelTo(centre))} from queue end`,
       ),
       entries.length === 0 ? createElement(Text, { dimColor: true }, 'Nothing here') : null,
       ...shown.map((entry, index) => {

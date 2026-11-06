@@ -249,6 +249,19 @@ test('level progress follows Character.calcLowerExp / getExperience4Level', {
   assert.equal(levelProgress(249, levelStartXp(249), 250).have, 0);
 });
 
+test('a missing or zero Character.init position is unknown, not the map origin', () => {
+  const clock = new ServerClock(1000);
+  const missing = CharacterState.fromInit({}, clock);
+  assert.deepEqual([missing.positionKnown, missing.position], [false, { x: 0, y: 0 }]);
+  const zero = CharacterState.fromInit({ pos: { x: 0, y: 0 } }, clock);
+  assert.equal(zero.positionKnown, false);
+  const real = CharacterState.fromInit({ pos: { x: 100, y: 200 } }, clock);
+  assert.deepEqual([real.positionKnown, real.position], [true, { x: 100, y: 200 }]);
+  assert.equal(zero.setPosition({ x: 0, y: 0 }), false, 'the origin stays unknown');
+  assert.equal(zero.setPosition({ x: 1, y: 2 }), true);
+  assert.deepEqual(zero.position, { x: 1, y: 2 });
+});
+
 test('real task queue entries parse', { skip: !HAVE_GAME && 'game.php missing' }, () => {
   const task = parseQueue(realBootstrap().character!.taskQueue);
   assert.ok(task.length >= 1);

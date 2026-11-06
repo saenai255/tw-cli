@@ -474,13 +474,15 @@ function PlanPane({ state, width, height }: { state: GameState; width: number; h
   const config = state.autopilot.config;
   const now = state.clock.now();
   const character = state.character;
-  const status = !plan
-    ? createElement(Text, { dimColor: true }, 'planning…')
-    : config.running
-      ? config.modules.dryRun
-        ? createElement(Text, { color: 'yellow' }, '● dry run · plans only, sends nothing')
-        : createElement(Text, { color: 'green' }, '● running')
-      : createElement(Text, { color: 'yellow' }, '‖ paused · this is what it would do');
+  const status = !state.queueEnd
+    ? createElement(Text, { color: 'yellow' }, 'waiting for the character position…')
+    : !plan
+      ? createElement(Text, { dimColor: true }, 'planning…')
+      : config.running
+        ? config.modules.dryRun
+          ? createElement(Text, { color: 'yellow' }, '● dry run · plans only, sends nothing')
+          : createElement(Text, { color: 'green' }, '● running')
+        : createElement(Text, { color: 'yellow' }, '‖ paused · this is what it would do');
   const only = state.autopilot.rules.onlyQuests.length;
   const goals = config.priority
     .map((group) => (group === 'quests' && only ? `Quests (${only} on route)` : GOAL_SHORT[group]))

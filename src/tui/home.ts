@@ -266,7 +266,15 @@ function WorkingPanel({ state, width, confirm }: { state: GameState; width: numb
   }
   const cfg = state.autopilot.config;
   const plan = state.runner.plan;
-  if (cfg.running || plan) {
+  if (!state.queueEnd && (cfg.running || plan)) {
+    rows.push(
+      createElement(
+        Text,
+        { key: 'ap', color: 'yellow', wrap: 'truncate' },
+        'autopilot waiting for the character position',
+      ),
+    );
+  } else if (cfg.running || plan) {
     const next = plan?.tasks[0];
     const status = cfg.running ? (cfg.modules.dryRun ? 'dry run' : 'running') : 'paused';
     rows.push(
@@ -364,8 +372,9 @@ function SessionPanel({ state, width }: { state: GameState; width: number }) {
 function Minimap({ state, width, height, zoom }: { state: GameState; width: number; height: number; zoom: number }) {
   const cols = Math.max(10, width - 2);
   const rows = Math.max(2, height - 3);
-  const grid = buildGrid(state, { ...state.character.position, zoom }, cols, rows);
-  const county = state.world.countyAt(state.character.position);
+  const centre = state.character.positionKnown ? state.character.position : state.queueEndPosition;
+  const grid = buildGrid(state, { ...centre, zoom }, cols, rows);
+  const county = state.world.countyAt(centre);
   return createElement(
     Box,
     { flexDirection: 'column', borderStyle: 'round', borderColor: 'gray', width, height, flexShrink: 0 },

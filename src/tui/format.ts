@@ -15,6 +15,9 @@ export function formatDuration(totalSeconds: number): string {
   return hours > 0 ? `${hours}:${twoDigits(minutes)}:${twoDigits(seconds)}` : `${minutes}:${twoDigits(seconds)}`;
 }
 
+/** A travel time, or "—" while the character position is unknown. */
+export const formatTravel = (way: number | null): string => (way === null ? '—' : formatDuration(way));
+
 /** "15s", "45m", "2h10", "3d4h" */
 export function shortDuration(seconds: number): string {
   if (seconds < SHORTEST_SECOND) {

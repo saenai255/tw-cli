@@ -43,9 +43,13 @@ export function collectPois(state: GameState): Poi[] {
   const out: Poi[] = [];
   const width = state.world;
   const homeId = state.character.homeTown?.id;
-  out.push({ kind: 'me', label: state.character.name, ...state.character.position });
+  if (state.character.positionKnown) {
+    out.push({ kind: 'me', label: state.character.name, ...state.character.position });
+  }
   state.queue.forEach((task, index) => {
-    out.push({ kind: 'queue', label: `${index + 1}. ${task.title}`, ...task.coords });
+    if (task.coordsKnown) {
+      out.push({ kind: 'queue', label: `${index + 1}. ${task.title}`, ...task.coords });
+    }
   });
   for (const town of width.towns) {
     if (town.id === homeId) {

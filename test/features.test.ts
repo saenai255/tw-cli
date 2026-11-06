@@ -1092,6 +1092,7 @@ test('TUI: loading screen, job filter by product + sort + LP toggle, map layers,
       start: now - 900,
       end: now + 2700,
       coords: { x: 120, y: 100 },
+      coordsKnown: true,
       title: 'Tending pigs',
       jobId: 1,
       raw: {},
@@ -1201,4 +1202,63 @@ test('TUI: loading screen, job filter by product + sort + LP toggle, map layers,
     app.unmount();
     app.cleanup();
   }
+});
+
+test('unknown position: jobs have no location until a live position arrives; a reload keeps it', () => {
+  fakeServer();
+  const state = makeState();
+  state.character.positionKnown = false;
+  state.character.position = { x: 0, y: 0 };
+  state.queue = [];
+  state.world.jobGroups = new Map([[1, [{ x: 1000, y: 1000 }]]]);
+  state.jobs = [
+    {
+      id: 7,
+      groupid: 1,
+      name: 'Cutting tobacco',
+      jobPoints: 10,
+      workPoints: 1,
+      laborPoints: 9,
+      motivation: 1,
+      danger: null,
+      durations: {},
+      luckValue: [0, 0],
+      values: { long: { duration: 3600, energy: 12, money: 10, experience: 50, luck: 0, items: [] } },
+    } as any,
+  ];
+  assert.deepEqual(
+    state.jobOptions().map((option) => [option.at, option.way]),
+    [[null, null]],
+    'no location from the map origin',
+  );
+  state.applySelf({ x: 1, y: 2 });
+  assert.equal(state.character.positionKnown, true);
+  assert.deepEqual(state.character.position, { x: 1, y: 2 });
+  assert.deepEqual(
+    state.jobOptions().map((option) => [option.at, option.way !== null]),
+    [[{ x: 1000, y: 1000 }, true]],
+  );
+
+  // A build task without coords is at the home town, not at the map origin.
+  const now = state.clock.now();
+  state.queue = [
+    {
+      queueId: 1,
+      type: 'build',
+      start: now,
+      end: now + 60,
+      coords: { x: 0, y: 0 },
+      coordsKnown: false,
+      title: 'Build',
+      raw: {},
+    },
+  ];
+  assert.deepEqual(state.queueEnd, { x: 200, y: 200 });
+  assert.deepEqual((state.queuedStep(state.queue[0]!) as any).at, { x: 200, y: 200 });
+
+  const zero = bootstrap();
+  zero.character.pos = { x: 0, y: 0 };
+  (state as any).apply({ client: state.client, bootstrap: zero });
+  assert.equal(state.character.positionKnown, true, 'a reload without pos keeps the live position');
+  assert.deepEqual(state.character.position, { x: 1, y: 2 });
 });

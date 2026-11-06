@@ -7,7 +7,7 @@ import type { RouteObjective, RoutePlan } from '../game/route.ts';
 import type { GameState } from '../game/state.ts';
 import { defined } from '../util/defined.ts';
 import type { ScreenProps } from './character.ts';
-import { formatDuration, money, scrollWindow, shortDuration, truncate } from './format.ts';
+import { formatDuration, formatTravel, money, scrollWindow, shortDuration, truncate } from './format.ts';
 
 const createElement = React.createElement;
 
@@ -439,7 +439,7 @@ export function QuestsScreen({
       createElement(
         Text,
         { key: 'e', dimColor: true, wrap: 'truncate' },
-        `${quest.employerName || quest.employer}${quest.employerAt ? ` · at ${quest.employerAt.x},${quest.employerAt.y} · ${formatDuration(state.travelTo(quest.employerAt))}` : ''}`,
+        `${quest.employerName || quest.employer}${quest.employerAt ? ` · at ${quest.employerAt.x},${quest.employerAt.y} · ${formatTravel(state.travelTo(quest.employerAt))}` : ''}`,
       ),
       ...(quest.limited ? [createElement(Text, { key: 'l', color: 'yellow', wrap: 'truncate' }, quest.limited)] : []),
       ...estimateLines(estimates.byQuest.get(quest.id), quest.finishable),
@@ -518,7 +518,7 @@ export function QuestsScreen({
       createElement(
         Text,
         { key: 'h', dimColor: true },
-        cur.at ? `at ${cur.at.x},${cur.at.y} · travel ${formatDuration(state.travelTo(cur.at))}` : 'In the saloon',
+        cur.at ? `at ${cur.at.x},${cur.at.y} · travel ${formatTravel(state.travelTo(cur.at))}` : 'In the saloon',
       ),
       createElement(Text, { key: 'k' }, 'Enter: show quests · w: walk there'),
     ];

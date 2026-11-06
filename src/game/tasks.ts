@@ -13,7 +13,7 @@
 import type { FormValue } from '../http/form.ts';
 import type { GameClient } from '../http/game-client.ts';
 import { type JsonObject, obj, objs, vals } from '../util/json.ts';
-import type { Position } from './character.ts';
+import { isUsablePosition, type Position } from './character.ts';
 
 export interface TaskWay {
   queueId: number;
@@ -28,33 +28,49 @@ export interface QueuedTask {
   start: number; // epoch s
   end: number;
   coords: Position;
+  /** Whether `coords` is a real position; false when the server sent none (the map origin is not a place). */
+  coordsKnown: boolean;
   title: string;
   jobId?: number | undefined;
   way?: TaskWay | undefined;
   raw: JsonObject;
 }
 
-const coordsOf = (value: unknown): Position => ({ x: Number(obj(value).x ?? 0), y: Number(obj(value).y ?? 0) });
+/** A task's coords, or the (0,0) sentinel when it has none (e.g. some build tasks the browser places at home). */
+const coordsOf = (value: unknown): { coords: Position; known: boolean } => {
+  const coords = { x: Number(obj(value).x), y: Number(obj(value).y) };
+  return isUsablePosition(coords) ? { coords, known: true } : { coords: { x: 0, y: 0 }, known: false };
+};
 
 export function parseQueueEntry(jsonValue: JsonObject): QueuedTask {
   const data = obj(jsonValue.data_obj ?? jsonValue.data);
+  const coords = coordsOf(data.coords);
+  let at = coords.coords;
+  let atKnown = coords.known;
   let way: TaskWay | undefined;
   if (data.wayData) {
     const wayDataJson = obj(data.wayData);
     const wd = obj(wayDataJson.data_obj ?? wayDataJson.data);
+    const wayCoords = coordsOf(wd.coords);
     way = {
       queueId: Number(wayDataJson.queue_id),
       start: Number(wayDataJson.date_start),
       end: Number(wayDataJson.date_done),
-      to: coordsOf(wd.coords),
+      to: wayCoords.coords,
     };
+    // A task without coords is at the end of its walk when the server sent wayData.
+    if (!atKnown && wayCoords.known) {
+      at = wayCoords.coords;
+      atKnown = true;
+    }
   }
   return {
     queueId: Number(jsonValue.queue_id),
     type: String(jsonValue.type),
     start: Number(jsonValue.date_start),
     end: Number(jsonValue.date_done),
-    coords: coordsOf(data.coords),
+    coords: at,
+    coordsKnown: atKnown,
     title: String(data.title ?? data.town_name ?? data.name ?? jsonValue.type),
     jobId: data.job_id === undefined || data.job_id === null ? undefined : Number(data.job_id),
     way,

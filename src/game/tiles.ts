@@ -9,7 +9,7 @@
 // Response shapes checked against a live reply (dynamic) and the saved sample game-38d090cd2e3a4.php (quests).
 import type { GameClient } from '../http/game-client.ts';
 import { arr, isObj, type JsonObject, objs, vals } from '../util/json.ts';
-import type { Position } from './character.ts';
+import { isUsablePosition, type Position } from './character.ts';
 import { TILE, WORLD_H, WORLD_W } from './world.ts';
 
 export interface SpecialJob extends Position {
@@ -115,7 +115,7 @@ export class TileCache {
             const xCoord = Number(data.x);
             const yCoord = Number(data.y);
             const key = `${xCoord},${yCoord}`;
-            if (data.job_id !== undefined && (data.gold || data.silver)) {
+            if (data.job_id !== undefined && (data.gold || data.silver) && isUsablePosition({ x: xCoord, y: yCoord })) {
               this.specialJobs.set(`${key}#${String(data.job_id)}`, {
                 x: xCoord,
                 y: yCoord,

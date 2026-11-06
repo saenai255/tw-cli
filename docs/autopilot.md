@@ -33,11 +33,12 @@ screen (`g a`). Spec agreed with the user in a grill session ("Decisions").
   a row's time, `J K` move an inserted row. It captures all keys while open (Esc closes).
 - Quest screen route prompt: `a` = autopilot on, Quests first, limited to the route's quests (`rules.onlyQuests`;
   clear it with the "Quests goal" row).
-- Plan pane (right): status (running / dry run / paused "what it would do"), goals in rank order, what the plan
-  earns (job pay only; deposits are not losses) and when the next level lands, live E/HP/cash/spend. Then "In the
-  queue" and numbered "Planned" rows: icon per kind, gains or length, energy before → after, `★` level-up, and the
-  task's reason dimmed under it (shown once when the next row shares it, e.g. walk + deposit). Back-to-back runs of
-  one job merge (`×3`); energy waits ≥ 1 min are their own `◷` rows.
+- Plan pane (right): status (running / dry run / paused "what it would do" / "waiting for the character
+  position…"), goals in rank order, what the plan earns (job pay only; deposits are not losses) and when the next
+  level lands, live E/HP/cash/spend. Then "In the queue" and numbered "Planned" rows: icon per kind, gains or
+  length, energy before → after, `★` level-up, and the task's reason dimmed under it (shown once when the next row
+  shares it, e.g. walk + deposit). Back-to-back runs of one job merge (`×3`); energy waits ≥ 1 min are their own
+  `◷` rows.
 - Reasons (`PlannedTask.why`): jobs say the goal that gave most of the score (`Candidate.by`): `quest: Cotton for
   "Farmer's woes" (3 left)` (left = before this run) or `best XP per energy · also <quest part>`. Sleeps: `energy low
   (8): sleep until …`; bank: `cash $X is over $Y: banking it`. Home shows the next task's title with its reason.
@@ -73,6 +74,10 @@ screen (`g a`). Spec agreed with the user in a grill session ("Decisions").
   10 min, energy rate × calibrated room scale), named towns, bag consumables above the reserve, budget left
   today, failing step keys, calibrated HP scale, and (when the toggle is on) discovered silver/gold jobs with
   their real `job/job` values.
+- **Position first**: the plan starts from `state.queueEnd`. When that is unknown (`Character.init.pos`/task
+  coords were `(0,0)` and no live update or queued task has supplied a position yet), the runner does not
+  replan or act and the pane says "waiting for the character position…". `(0,0)` is never used as the map
+  origin; a live `UserUpdate` or a queued task clears the wait and resumes planning.
 - **Quests in scope** (`state.autopilotQuests()`): open quests (or the route's), minus excluded quests / chains,
   repeatables unless on, and quests it cannot finish (`questBlocker`: an item no doable job drops, you do not
   have and it cannot buy, a job you cannot do, or "Go to / Resolve / Accept / Lose against …") unless "also

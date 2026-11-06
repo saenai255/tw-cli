@@ -38,6 +38,21 @@ test('queue summary: done time is the last task end; walk counts wayData legs an
   assert.equal(queueSummary([], now), null);
 });
 
+test('queue entries without coords stay unknown; a walk destination is used instead', () => {
+  const [build, sleep] = parseQueue([
+    { queue_id: 1, type: 'build', date_start: 1, date_done: 2, data: { title: 'Town hall' } },
+    {
+      queue_id: 2,
+      type: 'sleep',
+      date_start: 1,
+      date_done: 2,
+      data: { wayData: { queue_id: 3, date_start: 1, date_done: 2, data: { coords: { x: 5, y: 6 } } } },
+    },
+  ]);
+  assert.deepEqual([build!.coordsKnown, build!.coords], [false, { x: 0, y: 0 }]);
+  assert.deepEqual([sleep!.coordsKnown, sleep!.coords], [true, { x: 5, y: 6 }]);
+});
+
 test('formatClock: HH:MM today, weekday prefix otherwise', () => {
   const noon = new Date(2026, 10, 3, 12, 0).getTime() / 1000;
   assert.equal(formatClock(noon + 3600 + 300, noon), '13:05');
