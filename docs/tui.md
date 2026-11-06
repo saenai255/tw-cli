@@ -46,7 +46,9 @@ Ink (React without JSX: `const h = React.createElement`). Shell in `src/tui/app.
 - Reports on home cost no polling: one read on first show, then the live "new report" push (which already
   fetches page 1 for its log lines) fills `recentReports`; without live updates, one re-read 5 s after a job ends.
 - **Jobs** (mode `main`, `g j`): full-height list (xp / $ of the longest run, LP, travel; `!` marks jobs for the
-  highlighted quest), detail with xp per energy, queue with its end time and total. No chat here.
+  highlighted quest, `*` silver/gold jobs discovered on the map), detail with the effective motivation reward
+  tier, xp per energy, real location values when `job/job` has loaded, luck chance, queue with its end time and
+  total. No chat here.
 - **Debug** (`debug.ts`, mode `debug`, `g x`): left the debug log (`state.debug`, newest followed at the bottom
   until you move up; `f` category, `/` title filter), right the selected entry's data as pretty JSON (`l`, then `j k`
   scroll). `Tab` switches to **Now**: `runner.context()` live, one line per field, lists one item per line.

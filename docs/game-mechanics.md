@@ -33,7 +33,18 @@ browser client's code; **unverified** = assumed, check live and update this file
 ## Jobs
 
 - `work/index` gives per-character values per duration (energy, money, xp, luck, item drops); `job/job` is the
-  only source of **danger** (0–100) and live **motivation** (0–1).
+  only source of **danger** (0–100), live **motivation** (0–1) and the **values at one exact location**.
+- **Motivation is stepped, not linear**: rewards use the next 25 % breakpoint — 100 %, 75 %, 50 %, 25 %, 0 %
+  (`ceil(motivation × 4) / 4`, 0 at 0 %). It scales XP, money and luck **chance**, not product drop rate or the
+  luck value range. A long run costs 12 %, a middle one 5 %, a short one 1 % (official support; live en32:
+  job 134 1009 XP at 88 % → 757 at 72 %, job 160 1183 → 888 at 58 %, drops unchanged).
+  `work/index` values are already calculated for the motivation at read time; the client rescales them locally
+  when motivation changes. Motivation does not regenerate: every job resets to 100 % at 05:00 server time.
+- **Silver/gold jobs** are location-specific and not on the minimap. Tile `dynamic` job entries carry
+  `{job_id, group_id, x, y, gold, silver}`; `work/index` and `job/job` carry `is_gold` / `is_silver`. Silver boosts
+  XP, cash and product drop rate by 50 %, gold by 100 % (official support/wiki). The real boosted values are in
+  `job/job` for that location, not in the tile data; its `durations[]` has the same shape as `work/index`.
+  Silver jobs reset daily between 03:00 and 04:00, gold ones last until used up.
 - Item drops: expected items per run = `(prop + probBonus) / 100`.
 - Travel time: `distance · Game.travelSpeed · Character.speed` seconds.
 - Expected HP loss from danger: no formula known. The autopilot uses a heuristic (danger % of 10 % max HP per

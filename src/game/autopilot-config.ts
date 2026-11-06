@@ -28,6 +28,8 @@ export interface AutopilotConfig {
   hp: { sleepBelow: number; wakeAbove: number };
   /** Hotel and bank: own town when it is this close (s of walking). */
   ownTownWithin: number;
+  /** Job rules: `special` lets the planner use discovered silver/gold jobs. */
+  jobs: { special: boolean };
   bank: { above: number; maxDetour: number };
   consumables: { energy: boolean; health: boolean; motivation: boolean; reserve: number };
   /**
@@ -77,6 +79,7 @@ export const DEFAULT_CONFIG: AutopilotConfig = {
   wake: { levelUp: true, stretch: false, hpSafe: true, full: false },
   hp: { sleepBelow: 0.5, wakeAbove: 0.7 },
   ownTownWithin: 3600,
+  jobs: { special: false },
   bank: { above: 4500, maxDetour: 1800 },
   consumables: { energy: true, health: true, motivation: false, reserve: 2 },
   quests: {

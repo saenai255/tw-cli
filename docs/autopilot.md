@@ -12,6 +12,7 @@ screen (`g a`). Spec agreed with the user in a grill session ("Decisions").
 | `src/game/autopilot-config.ts`                           | Settings, rules, saved plan, spend tracker, duel record (`autopilot.json` in the config dir); `goalWeights`, `fingerprint`, `duelOutlook`.                                                 |
 | `src/game/autopilot.ts`                                  | Pure planner `planAutopilot(input)`: HP → bank → inserts → jobs by priority, energy sleeps / consumables when short. `parseConsumable`, `expectedHpLoss`.                                  |
 | `src/game/autopilot-runner.ts`                           | `AutopilotRunner` (`state.runner`): replans on input change, sends tasks, wakes from sleep, deposits, uses items, cancels for a better plan, NPC duels for XP, retries/backoff, spend cap. |
+| `src/game/special-jobs.ts`                               | 24 h disk cache of map-discovered silver/gold positions and their raw `job/job` replies.                                                                                                   |
 | `src/game/autopilot-quests.ts`                           | `QuestModule`: finish (reward by priority), wear + restore gear, buy quest items, pick up market goods, accept saloon quests, re-read quests waiting for a time window. `chooseReward`.    |
 | `src/game/quest-buy.ts`                                  | Buying quest items no job drops: `chooseBuys` (pure: source per item within the limits), `BuyCatalog` (shops, mobile trader, market offers the runner read; `state.buyCatalog`).           |
 | `src/game/debug-log.ts`, `src/tui/debug.ts`              | Debug log (`state.debug`) and its screen (`g x`); see "Debugging".                                                                                                                         |
@@ -23,6 +24,8 @@ screen (`g a`). Spec agreed with the user in a grill session ("Decisions").
 
 - `g a` opens the screen. `R` run/pause (paused still plans and shows "would do", sends nothing), `X` stop
   (pause + clear the plan; rules stay), `Space`/`Enter` toggle, `←→`/`+-` values, `J K` reorder priority.
+- `use discovered silver & gold jobs` (off): plan specials the map has found at their exact location, with the
+  real `job/job` values. It does not scan the map itself; see "Silver/gold jobs".
 - `Q` queue view: queued + planned rows (ETA, travel, energy, HP, XP, $, module). `c` cancel a queued task,
   `d` exclude a planned job / remove an inserted row, `u` clear exclusions, `s`/`b` insert a sleep / bank stop at
   a row's time, `J K` move an inserted row. It captures all keys while open (Esc closes).
@@ -66,7 +69,8 @@ screen (`g a`). Spec agreed with the user in a grill session ("Decisions").
   count toward needs; queued sleeps keep their room rates in `state.sleepRates`), jobs and locations (drops
   blended with calibration), quest needs (`state.autopilotNeeds()`, below), hotels (home + nearest town, every
   10 min, energy rate × calibrated room scale), named towns, bag consumables above the reserve, budget left
-  today, failing step keys, calibrated motivation and HP scale.
+  today, failing step keys, calibrated HP scale, and (when the toggle is on) discovered silver/gold jobs with
+  their real `job/job` values.
 - **Quests in scope** (`state.autopilotQuests()`): open quests (or the route's), minus excluded quests / chains,
   repeatables unless on, and quests it cannot finish (`questBlocker`: an item no doable job drops, you do not
   have and it cannot buy, a job you cannot do, or "Go to / Resolve / Accept / Lose against …") unless "also
@@ -120,12 +124,13 @@ screen (`g a`). Spec agreed with the user in a grill session ("Decisions").
   time + slot cost. Net energy = energy − XP × maxEnergy ÷ XP-per-level (a level-up refills energy), at least a
   quarter of the energy (the refill tops up to the max). Slot cost (`slotCost`, 10 min): each run takes a queue
   slot and the TUI is not always open, so runs that fill slots fast leave you idle.
-- **Motivation**: pay (XP, $, products) scales with projected motivation, `m − perRun × runs + perHour × hours`
-  (calibrated; 2 % per run, no recovery until then). Runs whose expected HP loss (heuristic × calibrated scale)
-  would take HP under `sleepBelow` are skipped, HP sleeps on or off; runs that cost no HP are always allowed
-  (under the line with no hotel, safe jobs go on while HP regenerates; this used to plan nothing). A level-up
-  raises max HP by `lpPerPoint` in the timeline.
-- **Energy short**: motivation item if motivation < 75 %; energy item if getting the energy otherwise takes
+- **Motivation**: XP and money scale with the game's 25 % breakpoints (`ceil(motivation × 4) / 4`); product
+  drops do not. Each run lowers the job's motivation by 1 / 5 / 12 % for short / middle / long (official
+  mechanics), and the plan tracks the accumulated drop per job, queued runs included. Runs whose expected HP
+  loss (heuristic × calibrated scale) would take HP under `sleepBelow` are skipped, HP sleeps on or off; runs
+  that cost no HP are always allowed (under the line with no hotel, safe jobs go on while HP regenerates). A
+  level-up raises max HP by `lpPerPoint` in the timeline.
+- **Energy short**: motivation item at or below 75 %; energy item if getting the energy otherwise takes
   ≥ 30 min; else sleep when it reaches the wake target sooner than waiting; else the timeline waits.
 - **Wake target** (toggles): when the run after the sleep levels up by itself, just its energy ("enough for X,
   which levels up"); else enough energy to reach the next level with the best XP/energy job (the level-up
@@ -146,6 +151,21 @@ screen (`g a`). Spec agreed with the user in a grill session ("Decisions").
   walks 19 min less → Prospecting and the second walk are cancelled. Manual town construction tasks
   (`type: 'build'`) are never cancelled.
 
+## Silver/gold jobs
+
+The map screen's normal 5×5 tile load discovers silver/gold job positions (`TileCache.specialJobs`); there is
+no separate scan and no extra traffic. `job/job` for a discovered position gives its real values, parsed into
+`GameState.specialDetails`; the jobs screen loads the selected special row on demand (its row says values are
+loading until then), and the autopilot loads the discovered ones within a 2 h walk of the queue end, one at a
+time, while `use discovered silver & gold jobs` is on (off by default). The planner treats each special as a
+location-specific candidate with its own key, coordinates and post; the normal job remains available at its
+other locations. Values are not computed: +50 % / +100 % are only the documented boost, the game's own
+`job/job` reply is what we use. A special seen more than 30 min ago is re-read once before it is queued; if it
+is gone, the plan is rebuilt. Product drops are not affected by motivation. Discovered positions and their raw
+`job/job` replies are saved in `<config dir>/cache/special-jobs-<host>.json` for 24 h and loaded at startup, so a
+restart does not need the map or another detail request; entries older than a day, or no longer in a refreshed
+tile, are dropped.
+
 ## Scenarios (`test/scenarios.test.ts`)
 
 About 100 small situations (timeline, job choice, energy, wake targets, HP, bank, quests, motivation, inserts,
@@ -163,8 +183,6 @@ samples. Logged to the debug log (`Calibration: …`); `runner.context().calibra
   read once with `show_report` (`parseJobReport`: `reportInfo.job_id`, `items`, run length from the page).
 - **HP loss**: the first server health after a dangerous job ends (live update or sync) vs the regen estimate;
   drops over 30 % of max HP count as attacks and are skipped. Gives `hpScale`.
-- **Motivation**: work/index is re-read every 30 min; each job's motivation change with the runs finished
-  between gives least-squares `perRun` / `perHour` (pairs at 100 % are skipped: recovery is capped there).
 - **Hotel rooms**: a sleep the autopilot queued and cancelled at its wake target: energy gained per hour vs the
   rate read from the hotel gives `roomScale` (only uncapped sleeps of 15+ min).
 - **Level-ups**: whether energy was full after each (`levelUps.refilled / seen`); the planner assumes it is.
@@ -193,6 +211,7 @@ town you stand in, use an item, buy quest items).
 | Module                                                                                                            | Status                                                                                    |
 | ----------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
 | Queue jobs, priority, look-ahead                                                                                  | built                                                                                     |
+| Silver / gold jobs discovered on the map                                                                          | built; toggle off by default, real `job/job` values, no scanning (see "Silver/gold jobs") |
 | Energy sleep + wake rules + auto-cancel                                                                           | built (room rate units unverified)                                                        |
 | HP (sleep / item / skip risky jobs)                                                                               | built (danger → HP is a heuristic)                                                        |
 | Consumables (energy, health, motivation)                                                                          | built; uses what is in the bag (it never buys them)                                       |
@@ -214,14 +233,16 @@ the market only under $5,000 (its trip to collect counted), trips ≤ 1 h, a min
 comparing sources · consumables valued at shop price · retries 1/5/15 min, 3 strikes · HP < 50 % sleep or item, up at ≥ 70 %
 at a hotel, 50–70 % keep working safely · NPC duels only (never players): HP ≥ 70 %, level ≤ duel level + margin,
 one loss stops them for the day, for XP when it beats the best job · plan to the 6 h horizon (was 10 jobs) · skip quests it cannot finish · level-up energy refund always on ·
-queue slots cost 10 min (the TUI is not open 24/7) · calibrate drops, HP, motivation, rooms from your own game.
+queue slots cost 10 min (the TUI is not open 24/7) · calibrate drops, HP, rooms from your own game · silver/gold
+jobs only when discovered by the normal map tile loads, real `job/job` values, toggle off by default, no scan.
 
 ## Unverified (check live, then move to docs/game-mechanics.md)
 
 - Hotel room `energy` / `health` units (read as % of max per hour; energy now calibrated from sleeps, health not).
 - Cancelling a running sleep keeps the regenerated energy (a sync runs after the first wake-up).
 - Level-up refills energy and HP (counted by calibration: `levelUps`).
-- Motivation scales XP / money / drops linearly; drop % > 100 means that many items on average.
+- Silver/gold `job/job` reply shape (`durations[]`, `is_gold` / `is_silver`): from the client bundle, a live
+  special has not been captured yet. Drop % > 100 means that many items on average.
 - Finishing map-giver quests needs you at the giver (the module walks there after a failed finish).
 - NPC duel loss detection (`attacker_died`, or "lost"/"defeat" in the result text).
 - Shops of a town you are not in can be read (`building_<shop>&town_id=N`; seen for the home town only).

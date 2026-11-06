@@ -110,6 +110,7 @@ export const ROWS: [Row, ...Row[]] = [
   },
   { kind: 'head', text: 'Modules (Space toggles · ← → change values)' },
   moduleToggle('jobs', 'Queue jobs'),
+  subToggle((configValue) => configValue.jobs, 'special', 'use discovered silver & gold jobs'),
   moduleToggle('energySleep', 'Sleep when out of energy'),
   subToggle((configValue) => configValue.wake, 'levelUp', 'wake: enough to level up'),
   subToggle((configValue) => configValue.wake, 'stretch', 'wake: enough for the next stretch'),

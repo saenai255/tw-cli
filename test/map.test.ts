@@ -127,7 +127,10 @@ test('tile data (live shape) yields the silver job and crowds', () => {
   const target = new TileCache();
   target.ingest(obj(JSON.parse(fixture('complete_data'))), [[116, 60]]);
   const silver = [...target.specialJobs.values()];
-  assert.deepEqual(silver, [{ x: 30380, y: 16308, jobId: 5, groupId: 7, gold: false, silver: true }]);
+  assert.equal(silver.length, 1);
+  const { seenAt, ...rest } = silver[0]!;
+  assert.ok(seenAt > 0);
+  assert.deepEqual(rest, { x: 30380, y: 16308, jobId: 5, groupId: 7, gold: false, silver: true });
   assert.ok(
     [...target.crowds.values()].some(
       (candidate) => candidate.x === 29888 && candidate.y === 15564 && candidate.count === 2,

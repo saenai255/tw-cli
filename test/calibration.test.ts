@@ -4,7 +4,7 @@ import { Calibration } from '../src/game/calibration.ts';
 import { parseJobReport } from '../src/game/mail.ts';
 import { questEnds } from '../src/game/quests.ts';
 
-test("calibration: drops blend reports with the game's number; HP, rooms and motivation from samples", () => {
+test("calibration: drops blend reports with the game's number; HP and rooms from samples", () => {
   const candidate = new Calibration(null);
   assert.equal(candidate.dropRate(4, 'long', 704000, 0.4), 0.4, "no reports: the game's number");
   for (let index = 0; index < 5; index++) {
@@ -20,19 +20,6 @@ test("calibration: drops blend reports with the game's number; HP, rooms and mot
   assert.equal(candidate.roomScale, 1);
   candidate.addRoom(0.2);
   assert.ok(Math.abs(candidate.roomScale - 0.6) < 1e-9);
-  // Motivation: −3 % per run, +1 % per hour.
-  assert.deepEqual(candidate.motivation, { perRun: 0.02, perHour: 0, samples: 0 });
-  for (const [runs, hours] of [
-    [2, 1],
-    [0, 3],
-    [4, 0.5],
-    [1, 2],
-  ] as const) {
-    candidate.addMotivation(runs, hours, -0.03 * runs + 0.01 * hours);
-  }
-  assert.ok(
-    Math.abs(candidate.motivation.perRun - 0.03) < 1e-9 && Math.abs(candidate.motivation.perHour - 0.01) < 1e-9,
-  );
   candidate.addLevelUp(true);
   assert.deepEqual(candidate.data.levelUps, { seen: 1, refilled: 1 });
 });

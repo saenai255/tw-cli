@@ -75,8 +75,8 @@ the summary. Small gains compound; nobody needs to schedule a cleanup.
 - Match the surrounding style: short header comment per file saying what it mirrors in the browser client
   (often with `@offset` into tw2game), terse JSDoc on non-obvious members, no comments that restate code.
 - Pure logic (planners, parsers, formulas) lives apart from requests so it can be unit-tested with fixtures.
-- Shared domain facts have one home: `isDoable` (jobs), `baseId` (items), `questInScope` (autopilot-config),
-  `DEFAULT_MOTIVATION` (calibration), `DEFAULT_WALK_ENERGY_PER_SECOND` (route), `errorMessage` (util/errors).
+- Shared domain facts have one home: `isDoable`, `motivationFactor`, `MOTIVATION_LOSS` (jobs), `baseId` (items),
+  `questInScope` (autopilot-config), `DEFAULT_WALK_ENERGY_PER_SECOND` (route), `errorMessage` (util/errors).
   Import them instead of repeating the comparison or number.
 - Requests go through `GameState`: `guard()` (busy lock, logs errors) for user actions; `autopilotCall()`
   (busy lock, throws) for the autopilot, which needs the error to back off.

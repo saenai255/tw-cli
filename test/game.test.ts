@@ -8,7 +8,14 @@ import React from 'react';
 import { type Bootstrap, parseBootstrap } from '../src/auth/bootstrap.ts';
 import { CharacterState, levelProgress, levelStartXp } from '../src/game/character.ts';
 import { ServerClock } from '../src/game/clock.ts';
-import { nearestLocation, parseDanger, parseJobDetail, wayTime } from '../src/game/jobs.ts';
+import {
+  motivationFactor,
+  nearestLocation,
+  parseDanger,
+  parseJobDetail,
+  scaleJobValues,
+  wayTime,
+} from '../src/game/jobs.ts';
 import { GameState } from '../src/game/state.ts';
 import { jobPost, parseQueue, TaskLimitError } from '../src/game/tasks.ts';
 import { CookieJar } from '../src/http/cookie-jar.ts';
@@ -131,12 +138,68 @@ test('way time and nearest location follow GameMap.calcWayTime', () => {
   assert.equal(nearestLocation([], { x: 0, y: 0 }), null);
 });
 
-test('job detail parses danger and motivation; missing values stay null', () => {
-  assert.deepEqual(parseJobDetail({ danger: '37', motivation: 0.55 }), { danger: 37, motivation: 0.55 });
-  assert.deepEqual(parseJobDetail({}), { danger: null, motivation: null });
+test('job detail parses danger, motivation, special kind and location values', () => {
+  assert.deepEqual(parseJobDetail({ danger: '37', motivation: 0.55 }), {
+    danger: 37,
+    motivation: 0.55,
+    special: null,
+    luckValue: null,
+    values: {},
+  });
+  assert.deepEqual(parseJobDetail({}), {
+    danger: null,
+    motivation: null,
+    special: null,
+    luckValue: null,
+    values: {},
+  });
+  const detail = parseJobDetail({
+    danger: 0,
+    motivation: 0.58,
+    is_gold: true,
+    minMaxItemVal: [100, 400],
+    durations: [
+      null,
+      null,
+      { duration: 3600, cost: 12, money: 355, xp: 888, luck: 3, items: [{ itemid: 2434000, prop: 31 }] },
+    ],
+  });
+  assert.equal(detail.special, 'gold');
+  assert.deepEqual(detail.luckValue, [100, 400]);
+  assert.deepEqual(detail.values.long, {
+    duration: 3600,
+    energy: 12,
+    money: 355,
+    experience: 888,
+    luck: 3,
+    items: [{ itemId: 2434000, expected: 0.31, percent: 31 }],
+  });
   assert.equal(parseDanger(0), 0);
   assert.equal(parseDanger('0'), 0);
   assert.equal(parseDanger(undefined), null);
+});
+
+test('motivation breakpoints and rescaling: 100/75/50/25/0, money rounds up, drops stay', () => {
+  assert.deepEqual(
+    [0, 0.01, 0.25, 0.26, 0.5, 0.51, 0.74, 0.75, 0.76, 0.99, 1].map(motivationFactor),
+    [0, 0.25, 0.25, 0.5, 0.5, 0.75, 0.75, 0.75, 1, 1, 1],
+  );
+  const scaled = scaleJobValues(
+    {
+      duration: 3600,
+      energy: 12,
+      money: 473,
+      experience: 1183,
+      luck: 2,
+      items: [{ itemId: 1, expected: 0.31, percent: 31 }],
+    },
+    1,
+    0.58,
+  );
+  assert.equal(scaled.money, 355);
+  assert.equal(scaled.experience, 888);
+  assert.equal(scaled.luck, 1.5);
+  assert.deepEqual(scaled.items, [{ itemId: 1, expected: 0.31, percent: 31 }]);
 });
 
 test('task/add body matches jQuery serialisation of TaskQueue.sendAdd', () => {

@@ -541,7 +541,6 @@ function plan(
     budget: options.budget ?? 1000,
     skip: new Set(options.skip ?? []),
     maxJobs: 3,
-    motivation: { perRun: 0, perHour: 0 },
   });
 }
 const keys = (pick: ReturnType<typeof plan>, countValue = 6) => pick.tasks.slice(0, countValue).map((task) => task.key);

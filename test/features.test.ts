@@ -980,6 +980,7 @@ test('quest item sources: jobs whose yields drop the item, nearest first; g mark
     workPoints: jobInfo.malus + 1,
     laborPoints: 49,
     motivation: 1,
+    valuesMotivation: 1,
     danger: 0,
     luckValue: [0, 0] as [number, number],
     values: {},
@@ -1055,6 +1056,7 @@ test('TUI: loading screen, job filter by product + sort + LP toggle, map layers,
       workPoints: jobInfo.malus + 1,
       laborPoints: jobInfo.id === 9 ? -500 : 49,
       motivation: 1,
+      valuesMotivation: 1,
       danger: 0,
       luckValue: [0, { 1: 400, 9: 20, 7: 250 }[jobInfo.id]!] as [number, number],
       values: value[jobInfo.id],
@@ -1143,7 +1145,7 @@ test('TUI: loading screen, job filter by product + sort + LP toggle, map layers,
     out = '';
     await keys('/', 'h', 'a', 'm', '\r');
     assert.match(plain(), /Tending pigs/);
-    assert.match(plain(), /Luck \$400/);
+    assert.match(plain(), /Luck \$0–\$400/);
     assert.match(plain(), /Drops: Ham 200%/);
     await settle(500);
     assert.match(plain(), /motiv 55%/);

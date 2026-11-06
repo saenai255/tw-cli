@@ -71,6 +71,9 @@ Plays the character while the TUI is open (`g a`; `R` runs / pauses, paused only
 part is a toggle with safe defaults, and the plan pane says what it will do next and why.
 
 - **Jobs** by your ranked goals (quests, XP, money, products), planned 6 h ahead, per energy or per hour.
+  Reward values follow the game's 25 % motivation breakpoints, and each run's motivation loss is tracked.
+- **Silver/gold jobs** discovered on the map can be planned at their exact location with the real
+  `job/job` values; the toggle is off by default and the autopilot does not scan the map itself.
 - **Sleep** when out of energy or low on HP, and wakes early once energy is enough to level up or for the next
   stretch; uses energy / health / motivation items from the bag when that beats waiting.
 - **Banks** cash over a limit when a town is on the way.
@@ -81,7 +84,7 @@ part is a toggle with safe defaults, and the plan pane says what it will do next
   $3,000 per quest in shops ($5,000 on the market) and to the daily spend cap.
 - **NPC duels** for XP when the record says they are won and beat the best job (never players).
 - Cancels queued tasks when a fresh plan is clearly better, retries failures with backoff, and learns drop rates,
-  HP loss, motivation and hotel rates from your own reports.
+  HP loss and hotel rates from your own game.
 
 Not yet: "Go to …", "Resolve / Accept: …" and "Lose against …" quest steps (skipped and logged). Details in
 [`docs/autopilot.md`](docs/autopilot.md).

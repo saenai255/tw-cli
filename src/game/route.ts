@@ -5,7 +5,7 @@
 // items expected per run. These are expectations, not guarantees; the plan is redone after each refresh.
 import type { Position } from './character.ts';
 import { baseId } from './items.ts';
-import type { DurationKey, JobInfo } from './jobs.ts';
+import type { DurationKey, JobDurationValues, JobInfo } from './jobs.ts';
 import { DURATION_KEYS, isDoable } from './jobs.ts';
 import type { Quest, QuestRequirement } from './quests.ts';
 
@@ -156,8 +156,12 @@ export interface PlanInput {
 }
 
 /** Expected progress of one run of `job` for `duration` towards each need. */
-export function runGains(job: JobInfo, duration: DurationKey, needs: RouteNeed[]): Record<string, number> {
-  const jobInfo = job.values[duration];
+export function runGains(
+  job: JobInfo,
+  duration: DurationKey,
+  needs: RouteNeed[],
+  jobInfo: JobDurationValues | undefined = job.values[duration],
+): Record<string, number> {
   const out: Record<string, number> = {};
   if (!jobInfo) {
     return out;

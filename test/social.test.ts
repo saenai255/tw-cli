@@ -1418,7 +1418,17 @@ test('job detail: danger and motivation come from job/job, concurrent loads are 
   routes['/game.php?window=job&mode=job'] = (body) => {
     const urlValue = new URLSearchParams(body);
     assert.equal(urlValue.get('jobId'), '1');
-    return { id: 1, danger: 37, motivation: 0.55 };
+    return {
+      id: 1,
+      danger: 37,
+      motivation: 0.55,
+      minMaxItemVal: [10, 400],
+      durations: [
+        { duration: 15, cost: 1, money: 1, xp: 5, luck: 0.01, items: [] },
+        { duration: 600, cost: 5, money: 50, xp: 200, luck: 0, items: [] },
+        { duration: 3600, cost: 12, money: 90, xp: 500, luck: 0, items: [] },
+      ],
+    };
   };
   const state = makeState();
   state.jobs = [
@@ -1436,6 +1446,7 @@ test('job detail: danger and motivation come from job/job, concurrent loads are 
       workPoints: 2,
       laborPoints: 49,
       motivation: 1,
+      valuesMotivation: 1,
       danger: null,
       luckValue: [0, 400],
       values: {},
@@ -1448,9 +1459,96 @@ test('job detail: danger and motivation come from job/job, concurrent loads are 
   await Promise.all([state.loadJobDetail(option.job, option.at), state.loadJobDetail(option.job, option.at)]);
   assert.equal(option.job.danger, 37);
   assert.equal(option.job.motivation, 0.55);
+  assert.equal(state.jobValues(option).long?.experience, 500);
+  assert.deepEqual(option.job.luckValue, [10, 400]);
   assert.equal(calls.filter((candidate) => candidate.url.includes('window=job&mode=job')).length, 1);
   await state.loadJobDetail(option.job, option.at);
   assert.equal(calls.filter((candidate) => candidate.url.includes('window=job&mode=job')).length, 2);
+});
+
+test('discovered gold job: job/job values become a special row at the exact location', async () => {
+  fakeServer();
+  routes['/game.php?window=job&mode=job'] = (body) => {
+    const urlValue = new URLSearchParams(body);
+    assert.equal(urlValue.get('jobId'), '1');
+    assert.equal(urlValue.get('x'), '120');
+    assert.equal(urlValue.get('y'), '100');
+    return {
+      id: 1,
+      danger: 12,
+      motivation: 0.58,
+      is_gold: true,
+      minMaxItemVal: [0, 400],
+      durations: [
+        { duration: 15, cost: 1, money: 2, xp: 10, luck: 0.01, items: [] },
+        { duration: 600, cost: 5, money: 100, xp: 400, luck: 0, items: [] },
+        {
+          duration: 3600,
+          cost: 12,
+          money: 355,
+          xp: 888,
+          luck: 0,
+          items: [{ itemid: 700000, prop: 62 }],
+        },
+      ],
+    };
+  };
+  const state = makeState();
+  state.jobs = [
+    {
+      id: 1,
+      groupid: 12,
+      name: 'Tending pigs',
+      shortname: 'swine',
+      level: 4,
+      malus: 1,
+      skills: {},
+      durations: { short: 15, middle: 600, long: 3600 },
+      yields: {},
+      jobPoints: 50,
+      workPoints: 2,
+      laborPoints: 49,
+      motivation: 0.58,
+      valuesMotivation: 0.58,
+      danger: null,
+      luckValue: [0, 400],
+      values: {
+        long: { duration: 3600, energy: 12, money: 355, experience: 888, luck: 0, items: [] },
+      },
+    },
+  ];
+  state.world.jobGroups = new Map([[12, [{ x: 120, y: 100 }]]]);
+  state.tiles.specialJobs.set('120,100#1', {
+    x: 120,
+    y: 100,
+    jobId: 1,
+    groupId: 12,
+    gold: true,
+    silver: false,
+    seenAt: Date.now(),
+  });
+
+  const before = state.jobOptions().find((option) => option.pendingSpecial);
+  assert.ok(before);
+  assert.equal(before.special, 'gold');
+  assert.deepEqual(state.jobValues(before), {});
+  assert.equal(await state.loadNextSpecialJob(), true);
+  const options = state.jobOptions('pigs');
+  const special = options.find((option) => option.special === 'gold');
+  assert.ok(special);
+  assert.deepEqual(special.at, { x: 120, y: 100 });
+  assert.equal(state.jobValues(special).long?.experience, 888);
+  assert.equal(state.jobValues(special).long?.money, 355);
+  state.jobs[0]!.motivation = 0.46;
+  assert.equal(state.jobValues(special).long?.experience, 592);
+  assert.equal(state.specialJobOptions()[0]?.special, 'gold');
+
+  const reloaded = makeState();
+  reloaded.jobs = state.jobs;
+  reloaded.loadSpecialCache();
+  assert.equal(reloaded.tiles.specialJobs.size, 1);
+  assert.equal(reloaded.specialJobOptions()[0]?.special, 'gold');
+  assert.equal(reloaded.specialJobOptions()[0]?.at?.x, 120);
 });
 
 test('sync: background game.php re-read updates health/money and flags a drop (no push after being dueled)', async () => {

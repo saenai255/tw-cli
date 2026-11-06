@@ -120,6 +120,7 @@ const itemNeed = (itemId: number, amount: number, options: { weight?: number; xp
 interface Scenario {
   start?: Partial<TimelineStart>;
   jobs?: any[];
+  specialJobs?: any[];
   fixed?: TimelineStep[];
   hotels?: any[];
   towns?: any[];
@@ -133,7 +134,6 @@ interface Scenario {
   bankTownId?: number;
   maxJobs?: number;
   itemValue?: (id: number) => number;
-  motivation?: { perRun: number; perHour: number };
 }
 function plan(source: Scenario): Plan {
   const config = structuredClone(DEFAULT_CONFIG);
@@ -143,6 +143,7 @@ function plan(source: Scenario): Plan {
     start: start(source.start),
     fixed: source.fixed ?? [],
     jobs,
+    specialJobs: source.specialJobs ?? [],
     locations: (groupId) => jobs.find((jobInfo) => jobInfo.groupid === groupId)?.at,
     wayTime: way,
     config,
@@ -157,7 +158,6 @@ function plan(source: Scenario): Plan {
     budget: source.budget ?? 1000,
     skip: new Set(source.skip ?? []),
     maxJobs: source.maxJobs ?? 6,
-    motivation: source.motivation ?? { perRun: 0, perHour: 0 },
   });
 }
 const keys = (pick: Plan, count = 6) => pick.tasks.slice(0, count).map((task) => task.key);
@@ -816,13 +816,20 @@ test('Q12 a drop of a better grade of the needed item counts', () => {
 
 // ---- Motivation, inserts, the server queue -----------------------------------------------------------------
 
-test('M1 motivation falls 2 % a run: 100 XP until it pays under the 95 XP job', () => {
-  // Runs pay 100, 98, 96, then 94 < 95.
+test('M1 motivation drops in 25 % steps: three 100 XP runs, then the 95 XP job', () => {
+  // Long runs cost 12 %: 100 %, 88 %, 76 % still pay 100 %; the fourth would pay 75 % (under 95).
   const pick = plan({
     jobs: [job(1, { long: [100, 0] }), job(2, { long: [95, 0] })],
-    motivation: { perRun: 0.02, perHour: 0 },
   });
   assert.deepEqual(keys(pick, 4), ['job:1:long', 'job:1:long', 'job:1:long', 'job:2:long']);
+});
+
+test('M1b the step is not linear: 90 % motivation keeps full pay for two runs', () => {
+  // Step: 100, 100, then 75 (below 98). A linear 2 %/run model would pay 97.8 on the first run.
+  const pick = plan({
+    jobs: [job(1, { long: [100, 0], motivation: 0.9 }), job(2, { long: [98, 0] })],
+  });
+  assert.deepEqual(keys(pick, 3), ['job:1:long', 'job:1:long', 'job:2:long']);
 });
 
 test('M2 the best job is at 50 % motivation and a motivation item is on hand: use it first', () => {
@@ -835,6 +842,51 @@ test('M2 the best job is at 50 % motivation and a motivation item is on hand: us
     },
   });
   assert.deepEqual(keys(pick, 2), ['use:5', 'job:1:long']);
+});
+
+test('S1 a discovered gold job at 100 s still beats the normal job: real boosted values', () => {
+  const normal = job(1, { long: [100, 0] });
+  const special = {
+    job: normal,
+    at: point(100),
+    special: 'gold',
+    values: {
+      long: { duration: 3600, energy: 12, experience: 200, money: 0, luck: 0, items: [] },
+    },
+    valuesMotivation: 1,
+  };
+  const pick = plan({ jobs: [normal], specialJobs: [special] });
+  assert.equal(pick.tasks[0]!.key, 'job:1:long:gold:100,0');
+  assert.equal((pick.tasks[0]!.step as { xp: number }).xp, 200);
+  const off = plan({ jobs: [normal] });
+  assert.equal(off.tasks[0]!.key, 'job:1:long');
+});
+
+test('S2 a special job does not scale its products with motivation', () => {
+  const normal = job(1, { long: [0, 0, 12, { 700000: 1 }], motivation: 0.5 });
+  const special = {
+    job: normal,
+    at: point(0),
+    special: 'silver',
+    values: {
+      long: {
+        duration: 3600,
+        energy: 12,
+        experience: 0,
+        money: 0,
+        luck: 0,
+        items: [{ itemId: 700000, expected: 1.5, percent: 150 }],
+      },
+    },
+    valuesMotivation: 0.5,
+  };
+  const pick = plan({
+    jobs: [normal],
+    specialJobs: [special],
+    needs: [itemNeed(700000, 10)],
+  });
+  assert.equal(pick.tasks[0]!.key, 'job:1:long:silver:0,0');
+  assert.equal((pick.tasks[0]!.step as { xp: number }).xp, 0);
 });
 
 test('I1 a sleep you inserted now comes first', () => {

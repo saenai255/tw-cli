@@ -12,6 +12,7 @@ import {
   type PlanInput,
   parseConsumable,
   planAutopilot,
+  type SpecialJobInput,
 } from './autopilot.ts';
 import type { AutopilotFile, PlannedTask } from './autopilot-config.ts';
 import { duelOutlook, fingerprint } from './autopilot-config.ts';
@@ -19,7 +20,7 @@ import { QuestModule } from './autopilot-quests.ts';
 import { DuelApi } from './duels.ts';
 import { fetchHotel, roomRate } from './hotel.ts';
 import { baseId } from './items.ts';
-import { isDoable, wayTime } from './jobs.ts';
+import { type DurationKey, isDoable, type JobDurationValues, wayTime } from './jobs.ts';
 import { MARKET_TTL_MS, SHOP_TTL_MS, where } from './quest-buy.ts';
 import type { GameState } from './state.ts';
 import { deposit, fetchMobileTrader, fetchShop, MarketApi, SHOPS, type Shop, useItem } from './trade.ts';
@@ -33,7 +34,9 @@ const MIN_MEASURED_HOURS = 0.25;
 const HOTEL_TTL_MS = 10 * 60_000;
 const CHECK_MS = 2_000;
 const CANCEL_CHECK_MS = 30_000;
-/** work/index re-read: motivation (calibration and job values) changes as jobs are done. */
+/** A special job detail older than this is re-read before the job is queued (used-up gold jobs, daily reset). */
+const SPECIAL_FRESH_MS = 30 * 60_000;
+/** work/index re-read: job values and motivation change as jobs are done and reset daily. */
 const JOBS_REFRESH_MS = 30 * 60_000;
 /** Quest shopping: at most this many towns' shops are read (nearest first), one request at a time this far apart. */
 const SHOP_TOWNS = 10;
@@ -240,7 +243,15 @@ export class AutopilotRunner {
         jobInfo.id,
         jobInfo.motivation,
         jobInfo.jobPoints,
-        jobInfo.values.long?.experience,
+        gameState.currentJobValues(jobInfo).long?.experience,
+      ]),
+      special: this.specialJobInputs().map((special) => [
+        special.job.id,
+        special.special,
+        special.at.x,
+        special.at.y,
+        special.values.long?.experience,
+        special.values.long?.money,
       ]),
       config: { ...this.config, running: undefined },
       rules: gameState.autopilot.rules,
@@ -262,27 +273,48 @@ export class AutopilotRunner {
     return planAutopilot({ ...this.planInput(fixedQueue, energyBonus, hotels), rates });
   }
 
-  /** Jobs with drop rates blended with what job reports showed (calibration.ts). */
+  /** Jobs with rewards scaled to the live motivation and drop rates blended with job reports. */
   private calibratedJobs(): GameState['jobs'] {
     const cal = this.state.calibration;
-    if (!Object.keys(cal.data.drops).length) {
-      return this.state.jobs;
+    return this.state.jobs.map((job) => {
+      const current = this.state.currentJobValues(job);
+      const values =
+        Object.keys(cal.data.drops).length === 0
+          ? current
+          : Object.fromEntries(
+              Object.entries(current).map(([entryKey, durationValues]) => [
+                entryKey,
+                durationValues && {
+                  ...durationValues,
+                  items: durationValues.items?.map((drop) => ({
+                    ...drop,
+                    expected: cal.dropRate(job.id, entryKey, drop.itemId, drop.expected),
+                  })),
+                },
+              ]),
+            );
+      return { ...job, values, valuesMotivation: job.motivation };
+    });
+  }
+
+  /** Discovered silver/gold jobs with their real values, only when the user opted in. */
+  private specialJobInputs(): SpecialJobInput[] {
+    if (!this.config.jobs.special) {
+      return [];
     }
-    return this.state.jobs.map((job) => ({
-      ...job,
-      values: Object.fromEntries(
-        Object.entries(job.values).map(([entryKey, durationValues]) => [
-          entryKey,
-          durationValues && {
-            ...durationValues,
-            items: durationValues.items?.map((drop) => ({
-              ...drop,
-              expected: cal.dropRate(job.id, entryKey, drop.itemId, drop.expected),
-            })),
-          },
-        ]),
-      ),
-    }));
+    return this.state.specialJobOptions().flatMap((option) =>
+      option.at && option.special && option.values
+        ? [
+            {
+              job: option.job,
+              at: option.at,
+              special: option.special,
+              values: option.values,
+              valuesMotivation: option.valuesMotivation ?? option.job.motivation,
+            },
+          ]
+        : [],
+    );
   }
 
   private planInput(fixedQueue = this.state.queue, energyBonus = 0, hotels = this.hotelOptions()): PlanInput {
@@ -306,6 +338,7 @@ export class AutopilotRunner {
       },
       fixed: fixedQueue.map((task) => gameState.queuedStep(task)),
       jobs: this.calibratedJobs(),
+      specialJobs: this.specialJobInputs(),
       locations: (value) => gameState.locations.get(value),
       wayTime: (position, positionValue) => wayTime(position, positionValue, gameState.travelSpeed, character.speed),
       config: this.config,
@@ -322,7 +355,6 @@ export class AutopilotRunner {
       buyTrips: gameState.buyTrips(),
       budget: this.budget(),
       skip: this.skipped(),
-      motivation: gameState.calibration.motivation,
       hpScale: gameState.calibration.hpScale,
     };
   }
@@ -452,7 +484,20 @@ export class AutopilotRunner {
 
   /** The planner's input without functions, compact enough for the log (jobs: values per duration). */
   private debugInput(input: PlanInput): Record<string, unknown> {
-    const { jobs, locations, wayTime: _w, itemValue: _v, skip, ...rest } = input;
+    const { jobs, locations, wayTime: _w, itemValue: _v, skip, specialJobs, ...rest } = input;
+    const valuesOf = (values: Partial<Record<DurationKey, JobDurationValues>>) =>
+      Object.fromEntries(
+        Object.entries(values).map(([entryKey, durationValues]) => [
+          entryKey,
+          durationValues && {
+            s: durationValues.duration,
+            e: durationValues.energy,
+            xp: durationValues.experience,
+            $: durationValues.money,
+            items: durationValues.items?.map((drop) => [drop.itemId, drop.percent]),
+          },
+        ]),
+      );
     return {
       ...rest,
       skip: [...(skip ?? [])],
@@ -465,18 +510,14 @@ export class AutopilotRunner {
         doable: isDoable(jobInfo),
         excluded: input.rules.excludedJobs.includes(jobInfo.id) || undefined,
         locations: locations(jobInfo.groupid)?.length ?? 0,
-        values: Object.fromEntries(
-          Object.entries(jobInfo.values).map(([entryKey, durationValues]) => [
-            entryKey,
-            durationValues && {
-              s: durationValues.duration,
-              e: durationValues.energy,
-              xp: durationValues.experience,
-              $: durationValues.money,
-              items: durationValues.items?.map((drop) => [drop.itemId, drop.percent]),
-            },
-          ]),
-        ),
+        values: valuesOf(jobInfo.values),
+      })),
+      specialJobs: specialJobs?.map((special) => ({
+        jobId: special.job.id,
+        name: special.job.name,
+        special: special.special,
+        at: special.at,
+        values: valuesOf(special.values),
       })),
     };
   }
@@ -556,6 +597,9 @@ export class AutopilotRunner {
         this.replanReason = null;
       }
       this.scanBuySources();
+      if (this.config.jobs.special) {
+        void gameState.loadNextSpecialJob();
+      }
       if (now - this.jobsAt >= JOBS_REFRESH_MS) {
         this.jobsAt = now;
         void gameState.loadJobs(true);
@@ -879,6 +923,19 @@ export class AutopilotRunner {
     const first = tasks[0];
     if (!first) {
       return void gameState.debug.once('carry', 'autopilot', 'Carry out: nothing planned', { why: this.plan?.why });
+    }
+    if (first.step.kind === 'job' && first.step.jobId !== undefined) {
+      const known = gameState.specialAt(first.step.jobId, first.step.at);
+      if (known && Date.now() - known.seenAt > SPECIAL_FRESH_MS) {
+        gameState.debug.add('autopilot', `Carry out: refreshing ${known.kind} job ${first.step.title}`, {
+          jobId: first.step.jobId,
+          at: first.step.at,
+          seenAt: new Date(known.seenAt).toISOString(),
+        });
+        await gameState.refreshSpecialJob(first.step.jobId, first.step.at);
+        this.replan('special job refreshed');
+        return;
+      }
     }
     if (first.action) {
       if (gameState.queue.length) {

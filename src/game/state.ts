@@ -31,11 +31,15 @@ import {
   fetchJobInfos,
   isDoable,
   JobCatalog,
+  type JobDetail,
   type JobDurationValues,
   type JobInfo,
   type JobLocations,
+  MOTIVATION_LOSS,
   nearestLocation,
   parseJobDetail,
+  type SpecialKind,
+  scaleJobValues,
   wayTime,
 } from './jobs.ts';
 import { collectLoginBonus, loginRewardText } from './loginbonus.ts';
@@ -61,6 +65,7 @@ import {
 import { RateTracker } from './rates.ts';
 import { planRoute, questNeeds, type RouteNeed, type RouteObjective, type RoutePlan } from './route.ts';
 import { SkillApi, type SkillPlan, Skills } from './skills.ts';
+import { loadSpecialJobs, type SpecialJobDetail, saveSpecialJobs } from './special-jobs.ts';
 import { jobPost, parseQueue, type QueuedTask, sleepPost, TaskApi, walkPost } from './tasks.ts';
 import { TileCache } from './tiles.ts';
 import { projectTimeline, type Timeline, type TimelineStep } from './timeline.ts';
@@ -105,6 +110,13 @@ export interface JobOption {
   at: Position | null;
   /** Travel time in seconds from where the queue ends. */
   way: number | null;
+  /** Silver/gold job at this exact location (values then come from its job/job reply). */
+  special?: SpecialKind | null;
+  /** Location-specific values from job/job, read at `valuesMotivation`. */
+  values?: Partial<Record<DurationKey, JobDurationValues>> | undefined;
+  valuesMotivation?: number | undefined;
+  /** A discovered special whose real values have not been loaded yet (select it to load them). */
+  pendingSpecial?: boolean;
 }
 
 /** What a quest still needs bought, where from, and why not when it cannot be done. */
@@ -125,10 +137,12 @@ const ATTACK_DROP_FRACTION = 0.3;
 /** A drop below this many HP and this fraction of max is regeneration jitter, not an attack. */
 const ATTACK_MIN_DROP = 2;
 const ATTACK_MIN_DROP_FRACTION = 0.01;
-/** Motivation recovery is invisible at the cap, so only samples below it teach anything. */
-const MOTIVATION_NEAR_CAP = 0.999;
-/** Shorter motivation windows are too noisy to calibrate from. */
-const MIN_MOTIVATION_HOURS = 0.25;
+/** A special reported as gone is not asked about again for this long. */
+const SPECIAL_MISS_TTL_MS = 3_600_000;
+/** A special's real values are re-read after this long (values and the job can change). */
+const SPECIAL_FRESH_MS = 2 * 3_600_000;
+/** The autopilot does not prefetch specials further than this walk from the queue end. */
+const SPECIAL_PREFETCH_TRAVEL = 2 * 3_600;
 
 const LAYERS_FILE = () => join(CONFIG_DIR, 'map-layers.json');
 function loadMapLayers(): Record<string, boolean> {
@@ -158,11 +172,15 @@ export type JobSort = 'name' | 'xp' | 'money' | 'luck' | 'distance';
 export const JOB_SORTS: JobSort[] = ['name', 'xp', 'money', 'luck', 'distance'];
 
 /** Value a job is sorted by: the 1 h (else longest known) duration's XP / money; luck = max $ find (maxLuck). */
-export function jobSortValue(job: JobInfo, sort: JobSort): number {
+export function jobSortValue(
+  job: JobInfo,
+  sort: JobSort,
+  values: Partial<Record<DurationKey, JobDurationValues>> = job.values,
+): number {
   if (sort === 'luck') {
     return job.luckValue[1];
   }
-  const jobInfo = job.values.long ?? job.values.middle ?? job.values.short;
+  const jobInfo = values.long ?? values.middle ?? values.short;
   if (!jobInfo) {
     return -Infinity;
   }
@@ -187,7 +205,7 @@ export class GameState extends EventEmitter {
   worldName = '';
   queue: QueuedTask[] = [];
   jobs: JobInfo[] = [];
-  private jobDetailLoading = new Set<number>();
+  private jobDetailLoading = new Set<string>();
   world = new WorldMap();
   tiles = new TileCache();
   log: LogEntry[] = [];
@@ -195,14 +213,22 @@ export class GameState extends EventEmitter {
   debug = new DebugLog();
   private debugSnap: Record<string, unknown> | null = null;
   private debugStarted = new Set<number>();
-  /** What the autopilot learns from reports, health and motivation (memory only unless the TUI sets a file). */
+  /** What the autopilot learns from reports, health and hotel sleeps (memory only unless the TUI sets a file). */
   calibration = new Calibration(null);
   /** Rates of sleeps on the queue (the queue entry has none): queueId → fraction of max per hour. */
   sleepRates = new Map<number, { energyRate: number; healthRate: number }>();
   /** Dangerous jobs finished whose HP loss has not been seen yet (next server health value). */
   private hpPending: { title: string; predicted: number } | null = null;
-  /** Job motivation at the last work/index read, and runs finished since. */
-  private motivationSeen = new Map<number, { m: number; at: number; runs: number }>();
+  /** Real job/job values of discovered silver/gold jobs, keyed by `${jobId}:${x},${y}`. */
+  specialDetails = new Map<string, SpecialJobDetail>();
+  /** Bumped when specialDetails changes, so the jobs list recomputes. */
+  specialVersion = 0;
+  /** Bumped when job values or motivation change, so the jobs list recomputes. */
+  jobsVersion = 0;
+  /** Discovered specials whose detail said they are no longer silver/gold, and when. */
+  private specialMisses = new Map<string, number>();
+  /** Special detail requests that failed: retry after this time. */
+  private specialRetry = new Map<string, number>();
   /** Job reports already counted (ids). */
   private reportsSeen = new Set<number>();
   busy = false;
@@ -349,6 +375,47 @@ export class GameState extends EventEmitter {
     return this.world.jobGroups;
   }
 
+  /** A job's work/index values rescaled to its live motivation. */
+  currentJobValues(job: JobInfo): Partial<Record<DurationKey, JobDurationValues>> {
+    return this.scaleValues(job.values, job.valuesMotivation ?? job.motivation, job.motivation);
+  }
+
+  /** The values a job option actually pays at this location (special rows use their job/job reply). */
+  jobValues(option: JobOption): Partial<Record<DurationKey, JobDurationValues>> {
+    if (option.values) {
+      return this.scaleValues(
+        option.values,
+        option.valuesMotivation ?? option.job.valuesMotivation ?? option.job.motivation,
+        option.job.motivation,
+      );
+    }
+    return this.currentJobValues(option.job);
+  }
+
+  private scaleValues(
+    values: Partial<Record<DurationKey, JobDurationValues>>,
+    fromMotivation: number,
+    toMotivation: number,
+  ): Partial<Record<DurationKey, JobDurationValues>> {
+    const out: Partial<Record<DurationKey, JobDurationValues>> = {};
+    for (const entryKey of DURATION_KEYS) {
+      const durationValues = values[entryKey];
+      if (durationValues) {
+        out[entryKey] = scaleJobValues(durationValues, fromMotivation, toMotivation);
+      }
+    }
+    return out;
+  }
+
+  specialKey(jobId: number, at: Position): string {
+    return `${jobId}:${at.x},${at.y}`;
+  }
+
+  /** The silver/gold job at this exact spot, if its real values are known. */
+  specialAt(jobId: number, at: Position): SpecialJobDetail | undefined {
+    return this.specialDetails.get(this.specialKey(jobId, at));
+  }
+
   /** Doable jobs of one map location's job group, with travel from where the queue ends. */
   jobsAtLocation(groupId: number, at: { x: number; y: number }): JobOption[] {
     const from = this.queueEndPosition;
@@ -398,16 +465,15 @@ export class GameState extends EventEmitter {
     return changed;
   }
 
-  /** A queued job ended: count the run for motivation and expect its HP loss in the next health value. */
+  /** A queued job ended: lower its motivation and expect its HP loss in the next health value. */
   private jobFinished(taskInfo: QueuedTask): void {
     const searchQuery = this.queuedJob(taskInfo);
     if (!searchQuery) {
       return;
     }
-    const seen = this.motivationSeen.get(searchQuery.job.id);
-    if (seen) {
-      seen.runs++;
-    }
+    // The game deducts motivation when the report is generated; work/index corrects any drift later.
+    searchQuery.job.motivation = Math.max(0, searchQuery.job.motivation - MOTIVATION_LOSS[searchQuery.duration]);
+    this.jobsVersion++;
     if (searchQuery.job.danger) {
       const predicted = expectedHpLoss(searchQuery.job.danger, searchQuery.values.duration, this.character.maxHealth);
       this.hpPending = { title: taskInfo.title, predicted: (this.hpPending?.predicted ?? 0) + predicted };
@@ -450,27 +516,6 @@ export class GameState extends EventEmitter {
       `Calibration: level-up ${refilled ? 'refilled' : 'did NOT refill'} energy (${character.energy}/${character.maxEnergy})`,
       this.calibration.data.levelUps,
     );
-  }
-
-  /** work/index read: each job's motivation change since the last read, with the runs done between. */
-  private observeMotivation(): void {
-    const now = this.clock.now();
-    for (const jobInfo of this.jobs) {
-      const prev = this.motivationSeen.get(jobInfo.id);
-      if (prev) {
-        const hours = (now - prev.at) / 3600;
-        // At 100 % recovery is invisible (capped): only uncapped pairs teach anything.
-        if (
-          (prev.runs > 0 || hours > MIN_MOTIVATION_HOURS) &&
-          prev.m < MOTIVATION_NEAR_CAP &&
-          jobInfo.motivation < MOTIVATION_NEAR_CAP
-        ) {
-          this.calibration.addMotivation(prev.runs, hours, jobInfo.motivation - prev.m);
-        }
-      }
-      this.motivationSeen.set(jobInfo.id, { m: jobInfo.motivation, at: now, runs: 0 });
-    }
-    this.debug.add('state', 'Calibration: job motivation read', this.calibration.motivation);
   }
 
   /** New job reports (from a report list): drops per job and duration. One show_report request each. */
@@ -634,6 +679,7 @@ export class GameState extends EventEmitter {
     this.startup = { steps: opts.connect ? [{ ...opts.connect, status: 'done' }] : [], done: false };
     await this.step('Server clock', () => this.guard('Clock sync', () => this.clock.sync(this.client)));
     await this.step('Jobs and map', () => this.loadJobs(true));
+    this.loadSpecialCache();
     await this.step('Item data', () => this.loadItems());
     await this.step('Quest log', () => this.loadQuests(true));
     if (opts.live !== false) {
@@ -662,7 +708,8 @@ export class GameState extends EventEmitter {
     }
     this.debug = prev.debug;
     this.sleepRates = prev.sleepRates;
-    this.motivationSeen = prev.motivationSeen;
+    this.specialDetails = prev.specialDetails;
+    this.specialVersion = prev.specialVersion;
     this.reportsSeen = prev.reportsSeen;
     this.hpPending = prev.hpPending;
     if (prev.autoRoute) {
@@ -1361,7 +1408,7 @@ export class GameState extends EventEmitter {
         { fresh: freshMap },
       );
       this.jobs = jobs.sort((first, second) => first.name.localeCompare(second.name));
-      this.observeMotivation();
+      this.jobsVersion++;
       this.world = WorldMap.fromMinimap(minimap);
       if (!quiet) {
         this.info(`Loaded ${jobs.length} jobs.`);
@@ -1370,19 +1417,21 @@ export class GameState extends EventEmitter {
   }
 
   /**
-   * job/job is the only endpoint that returns danger, and it also carries the live motivation.
-   * Refreshes the selected job only: the browser does the same when its job window opens.
+   * job/job is the only endpoint that returns danger and the location's real values, and it carries the
+   * live motivation. Refreshes one selected/considered job, as the browser does when its window opens.
    */
-  async loadJobDetail(job: JobInfo, at: Position): Promise<void> {
-    if (this.jobDetailLoading.has(job.id)) {
-      return;
+  async loadJobDetail(job: JobInfo, at: Position): Promise<JobDetail | null> {
+    const key = this.specialKey(job.id, at);
+    if (this.jobDetailLoading.has(key)) {
+      return null;
     }
-    this.jobDetailLoading.add(job.id);
+    this.jobDetailLoading.add(key);
     try {
-      const detail = parseJobDetail(await fetchJobDetail(this.client, job.id, at));
+      const raw = await fetchJobDetail(this.client, job.id, at);
+      const detail = parseJobDetail(raw);
       const current = this.jobs.find((jobInfo) => jobInfo.id === job.id);
       if (!current) {
-        return;
+        return detail;
       }
       let changed = false;
       if (detail.danger !== null && detail.danger !== current.danger) {
@@ -1393,20 +1442,174 @@ export class GameState extends EventEmitter {
         current.motivation = detail.motivation;
         changed = true;
       }
+      if (
+        detail.luckValue &&
+        (detail.luckValue[0] !== current.luckValue[0] || detail.luckValue[1] !== current.luckValue[1])
+      ) {
+        current.luckValue = detail.luckValue;
+        changed = true;
+      }
+      if (detail.special) {
+        this.specialRetry.delete(key);
+        const seenAt = Date.now();
+        this.specialDetails.set(key, {
+          jobId: current.id,
+          at: { ...at },
+          kind: detail.special,
+          detail,
+          seenAt,
+          raw,
+        });
+        // A job/job check can discover a special the tile cache missed; keep it in the same map.
+        this.tiles.specialJobs.set(`${at.x},${at.y}#${current.id}`, {
+          x: at.x,
+          y: at.y,
+          jobId: current.id,
+          groupId: current.groupid,
+          gold: detail.special === 'gold',
+          silver: detail.special === 'silver',
+          seenAt,
+        });
+        this.specialVersion++;
+        changed = true;
+        this.saveSpecialCache();
+      } else {
+        const tileKey = `${at.x},${at.y}#${job.id}`;
+        let cacheChanged = false;
+        if (this.tiles.specialJobs.has(tileKey)) {
+          this.specialMisses.set(key, Date.now());
+          this.tiles.specialJobs.delete(tileKey);
+          cacheChanged = true;
+        }
+        if (this.specialDetails.delete(key)) {
+          cacheChanged = true;
+        }
+        if (cacheChanged) {
+          this.specialVersion++;
+          changed = true;
+          this.saveSpecialCache();
+        }
+        if (Object.keys(detail.values).length) {
+          current.values = detail.values;
+          current.valuesMotivation = detail.motivation ?? current.motivation;
+          changed = true;
+        }
+      }
       if (changed) {
+        this.jobsVersion++;
         this.changed();
       }
+      return detail;
     } catch (err) {
-      this.error(`Job detail: ${errorMessage(err)}`);
+      this.debug.add('request', `Job detail ${job.name} at ${at.x},${at.y} failed`, { error: errorMessage(err) });
+      return null;
     } finally {
-      this.jobDetailLoading.delete(job.id);
+      this.jobDetailLoading.delete(key);
     }
   }
 
+  /**
+   * Loads the real values of the next discovered silver/gold job whose detail is not known yet (one request
+   * per call; the caller decides when to spend it). Used by the autopilot toggle; the jobs screen loads the
+   * selected row through loadJobDetail.
+   */
+  async loadNextSpecialJob(): Promise<boolean> {
+    for (const special of this.tiles.specialJobs.values()) {
+      const job = this.jobs.find((jobInfo) => jobInfo.id === special.jobId);
+      if (!job || !isDoable(job)) {
+        continue;
+      }
+      const at = { x: special.x, y: special.y };
+      if (wayTime(this.queueEndPosition, at, this.travelSpeed, this.character.speed) > SPECIAL_PREFETCH_TRAVEL) {
+        continue;
+      }
+      const key = this.specialKey(job.id, special);
+      const known = this.specialDetails.get(key);
+      const stale = known !== undefined && Date.now() - known.seenAt > SPECIAL_FRESH_MS;
+      const missedAt = this.specialMisses.get(key);
+      const retryAt = this.specialRetry.get(key);
+      if (
+        (known && !stale) ||
+        this.jobDetailLoading.has(key) ||
+        (missedAt !== undefined && Date.now() - missedAt < SPECIAL_MISS_TTL_MS) ||
+        (retryAt !== undefined && Date.now() < retryAt)
+      ) {
+        continue;
+      }
+      const detail = await this.loadJobDetail(job, special);
+      if (!detail) {
+        this.specialRetry.set(key, Date.now() + 60_000);
+      } else if (!detail.special) {
+        this.specialMisses.set(key, Date.now());
+        this.specialRetry.delete(key);
+      } else {
+        this.specialRetry.delete(key);
+      }
+      return true;
+    }
+    return false;
+  }
+
+  /** Re-reads a special job's values right before it is queued; false when it is no longer silver/gold. */
+  async refreshSpecialJob(jobId: number, at: Position): Promise<boolean> {
+    const job = this.jobs.find((jobInfo) => jobInfo.id === jobId);
+    if (!job) {
+      return false;
+    }
+    const detail = await this.loadJobDetail(job, at);
+    if (!detail) {
+      this.specialRetry.set(this.specialKey(jobId, at), Date.now() + 60_000);
+      return false;
+    }
+    if (!detail.special) {
+      this.specialDetails.delete(this.specialKey(jobId, at));
+      this.specialVersion++;
+      this.jobsVersion++;
+      this.changed();
+      return false;
+    }
+    return true;
+  }
+
+  /** Discovered special jobs with real values, for the autopilot planner. */
+  specialJobOptions(): JobOption[] {
+    const from = this.queueEndPosition;
+    const out: JobOption[] = [];
+    for (const special of this.tiles.specialJobs.values()) {
+      const job = this.jobs.find((jobInfo) => jobInfo.id === special.jobId);
+      const key = this.specialKey(special.jobId, special);
+      const known = this.specialDetails.get(key);
+      const missedAt = this.specialMisses.get(key);
+      const retryAt = this.specialRetry.get(key);
+      if (
+        !job ||
+        !known ||
+        !isDoable(job) ||
+        (missedAt !== undefined && Date.now() - missedAt < SPECIAL_MISS_TTL_MS) ||
+        (retryAt !== undefined && Date.now() < retryAt)
+      ) {
+        continue;
+      }
+      const at = { x: special.x, y: special.y };
+      out.push({
+        job,
+        at,
+        way: wayTime(from, at, this.travelSpeed, this.character.speed),
+        special: known.kind,
+        values: this.scaleValues(known.detail.values, known.detail.motivation ?? job.motivation, job.motivation),
+        valuesMotivation: job.motivation,
+      });
+    }
+    return out;
+  }
+
   /** Product names a job drops (static yields + per-duration drops), for search and display. */
-  jobProducts(job: JobInfo): { itemId: number; name: string; percent: number | null }[] {
+  jobProducts(
+    job: JobInfo,
+    values: Partial<Record<DurationKey, JobDurationValues>> = this.currentJobValues(job),
+  ): { itemId: number; name: string; percent: number | null }[] {
     const out = new Map<number, { itemId: number; name: string; percent: number | null }>();
-    for (const yCoord of job.values.long?.items ?? job.values.middle?.items ?? []) {
+    for (const yCoord of values.long?.items ?? values.middle?.items ?? []) {
       out.set(baseId(yCoord.itemId), {
         itemId: yCoord.itemId,
         name: this.itemName(yCoord.itemId),
@@ -1422,37 +1625,74 @@ export class GameState extends EventEmitter {
   }
 
   /**
-   * Jobs with the nearest location from where the queue ends. `filter` matches the job name or a product
-   * it drops. By default only jobs with enough labor points; `showAll` adds the rest (as the web lists
-   * them: jobs you could reach by level). `sort` orders by the 1 h values, best first.
+   * Jobs with the nearest location from where the queue ends, plus discovered silver/gold jobs with their
+   * real job/job values. `filter` matches the job name or a product it drops. By default only jobs with
+   * enough labor points; `showAll` adds the rest (as the web lists them: jobs you could reach by level).
+   * `sort` orders by the 1 h values, best first.
    */
   jobOptions(filter = '', opts: { sort?: JobSort; showAll?: boolean } = {}): JobOption[] {
     const from = this.queueEndPosition;
     const textValue = filter.trim().toLowerCase();
     const sort = opts.sort ?? 'name';
-    const list = this.jobs
-      .filter((jobInfo) =>
-        opts.showAll ? isDoable(jobInfo) || this.character.level >= jobInfo.level : isDoable(jobInfo),
-      )
-      .filter(
-        (jobInfo) =>
-          !textValue ||
-          jobInfo.name.toLowerCase().includes(textValue) ||
-          this.jobProducts(jobInfo).some((pick) => pick.name.toLowerCase().includes(textValue)),
-      )
+    const allowed = (jobInfo: JobInfo) =>
+      opts.showAll ? isDoable(jobInfo) || this.character.level >= jobInfo.level : isDoable(jobInfo);
+    const matches = (jobInfo: JobInfo, values: Partial<Record<DurationKey, JobDurationValues>>) =>
+      !textValue ||
+      jobInfo.name.toLowerCase().includes(textValue) ||
+      this.jobProducts(jobInfo, values).some((pick) => pick.name.toLowerCase().includes(textValue));
+    const list: JobOption[] = this.jobs
+      .filter((jobInfo) => allowed(jobInfo) && matches(jobInfo, this.currentJobValues(jobInfo)))
       .map((job) => {
         const at = nearestLocation(this.locations.get(job.groupid), from);
         return { job, at, way: at ? wayTime(from, at, this.travelSpeed, this.character.speed) : null };
       });
+    for (const special of this.tiles.specialJobs.values()) {
+      const job = this.jobs.find((jobInfo) => jobInfo.id === special.jobId);
+      if (!job || !allowed(job)) {
+        continue;
+      }
+      const known = this.specialDetails.get(this.specialKey(special.jobId, special));
+      const kind = known?.kind ?? (special.gold ? 'gold' : 'silver');
+      const values: Partial<Record<DurationKey, JobDurationValues>> = known?.detail.values ?? {};
+      if (!matches(job, values)) {
+        continue;
+      }
+      const at = { x: special.x, y: special.y };
+      const way = wayTime(from, at, this.travelSpeed, this.character.speed);
+      const normal = list.find((option) => option.job.id === job.id && option.at?.x === at.x && option.at?.y === at.y);
+      if (normal) {
+        normal.special = kind;
+        normal.pendingSpecial = !known;
+        normal.values = values;
+        normal.valuesMotivation = known?.detail.motivation ?? job.motivation;
+        normal.way = way;
+        continue;
+      }
+      list.push({
+        job,
+        at,
+        way,
+        special: kind,
+        pendingSpecial: !known,
+        values,
+        valuesMotivation: known?.detail.motivation ?? job.motivation,
+      });
+    }
     if (sort === 'name') {
-      return list;
+      return list.sort(
+        (first, second) =>
+          first.job.name.localeCompare(second.job.name) ||
+          (first.special ? 1 : 0) - (second.special ? 1 : 0) ||
+          (first.at?.x ?? 0) - (second.at?.x ?? 0),
+      );
     }
     if (sort === 'distance') {
       return list.sort((first, second) => (first.way ?? Infinity) - (second.way ?? Infinity));
     }
     return list.sort(
       (first, second) =>
-        jobSortValue(second.job, sort) - jobSortValue(first.job, sort) || first.job.name.localeCompare(second.job.name),
+        jobSortValue(second.job, sort, this.jobValues(second)) - jobSortValue(first.job, sort, this.jobValues(first)) ||
+        first.job.name.localeCompare(second.job.name),
     );
   }
 
@@ -1465,7 +1705,9 @@ export class GameState extends EventEmitter {
       this.error(`No known location for ${job.name}`);
       return;
     }
-    const seconds = job.values[duration]?.duration ?? job.durations[duration];
+    const seconds =
+      this.jobValues(option)[duration]?.duration ?? job.values[duration]?.duration ?? job.durations[duration];
+    const label = option.special ? `${option.special} ${job.name}` : job.name;
     await this.guard('Start job', async () => {
       const res = await this.tasks.add(this.queue.length, [jobPost(job.id, at, seconds)], this.taskLimit);
       if (res.energy !== undefined) {
@@ -1476,7 +1718,7 @@ export class GameState extends EventEmitter {
       }
       if (res.added.length) {
         this.queue.push(...res.added);
-        this.info(`Queued ${job.name} (${duration}) at ${at.x},${at.y}`);
+        this.info(`Queued ${label} (${duration}) at ${at.x},${at.y}`);
       }
     });
   }
@@ -1946,11 +2188,15 @@ export class GameState extends EventEmitter {
     if (!job) {
       return null;
     }
+    const special = this.specialAt(job.id, taskInfo.coords);
+    const values = special
+      ? this.scaleValues(special.detail.values, special.detail.motivation ?? job.motivation, job.motivation)
+      : this.currentJobValues(job);
     const secs = taskInfo.end - (taskInfo.way?.end ?? taskInfo.start);
     let found: { job: JobInfo; duration: DurationKey; values: JobDurationValues } | null = null;
     let best = Infinity;
     for (const entryKey of DURATION_KEYS) {
-      const jobInfo = job.values[entryKey];
+      const jobInfo = values[entryKey];
       if (jobInfo && Math.abs(jobInfo.duration - secs) < best) {
         [found, best] = [{ job, duration: entryKey, values: jobInfo }, Math.abs(jobInfo.duration - secs)];
       }
@@ -2026,10 +2272,58 @@ export class GameState extends EventEmitter {
     return plan.stops[0]?.at ?? null;
   }
 
-  /** Loads tile details (quest giver names, gold/silver jobs, crowds) around a map position. */
+  /** Loads silver/gold jobs discovered in the last day, with any real job/job values already fetched. */
+  loadSpecialCache(): void {
+    const saved = loadSpecialJobs(this.client.worldUrl);
+    let changed = false;
+    for (const job of saved.jobs) {
+      const key = `${job.x},${job.y}#${job.jobId}`;
+      const current = this.tiles.specialJobs.get(key);
+      if (!current || job.seenAt > current.seenAt) {
+        this.tiles.specialJobs.set(key, job);
+        changed = true;
+      }
+    }
+    for (const special of saved.details) {
+      const key = this.specialKey(special.jobId, special.at);
+      const current = this.specialDetails.get(key);
+      if (!current || special.seenAt > current.seenAt) {
+        this.specialDetails.set(key, special);
+        changed = true;
+      }
+    }
+    if (changed) {
+      this.specialVersion++;
+      this.jobsVersion++;
+      this.changed();
+    }
+    this.debug.add(
+      'state',
+      `Special jobs: loaded ${saved.jobs.length} position(s), ${saved.details.length} with values from disk`,
+    );
+  }
+
+  private saveSpecialCache(): void {
+    let pruned = false;
+    for (const [key, special] of this.specialDetails) {
+      if (!this.tiles.specialJobs.has(`${special.at.x},${special.at.y}#${special.jobId}`)) {
+        this.specialDetails.delete(key);
+        pruned = true;
+      }
+    }
+    saveSpecialJobs(this.client.worldUrl, this.tiles.specialJobs.values(), this.specialDetails.values());
+    if (pruned) {
+      this.specialVersion++;
+      this.jobsVersion++;
+    }
+  }
+
+  /** Discovers silver/gold job positions around the map cursor (the browser's normal tile loader). */
   async loadTilesAround(at: { x: number; y: number }): Promise<void> {
     try {
       if (await this.tiles.loadAround(this.client, at)) {
+        this.specialVersion++;
+        this.saveSpecialCache();
         this.changed();
       }
     } catch (err) {
@@ -2388,6 +2682,9 @@ export class GameState extends EventEmitter {
     });
     if (entry?.usetype === 'buff' || entry?.usebonus?.length) {
       await this.refreshSkills();
+    }
+    if (entry?.usebonus?.some((textValue) => /work motivation/i.test(textValue))) {
+      await this.loadJobs(true);
     }
   }
 

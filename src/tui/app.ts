@@ -4,7 +4,7 @@
 import { Box, render, Text, useApp, useInput, useWindowSize } from 'ink';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { defaultRoom } from '../game/hotel.ts';
-import { DURATION_KEYS, type DurationKey } from '../game/jobs.ts';
+import { DURATION_KEYS, type DurationKey, motivationFactor } from '../game/jobs.ts';
 import { poisNear } from '../game/poi.ts';
 import { type GameState, JOB_SORTS, type JobOption, type JobSort, type StartupStep } from '../game/state.ts';
 import { defined } from '../util/defined.ts';
@@ -200,12 +200,15 @@ function helpFor(context: {
 }
 
 /** Columns after the name: XP and $ of the longest duration (when wide enough), luck when sorted by it, LP, travel. */
-function jobCells(option: JobOption, columns: { wide: boolean; sortedByLuck: boolean }): string {
-  const values = option.job.values.long ?? option.job.values.middle ?? option.job.values.short;
+function jobCells(state: GameState, option: JobOption, columns: { wide: boolean; sortedByLuck: boolean }): string {
+  const values = state.jobValues(option);
+  const jobInfo = values.long ?? values.middle ?? values.short;
   const travel = option.way === null ? '—' : formatDuration(option.way);
+  const xp = option.pendingSpecial ? '…' : jobInfo ? `${jobInfo.experience}xp` : '';
+  const cash = option.pendingSpecial ? '…' : jobInfo ? money(jobInfo.money) : '';
   return [
-    columns.wide ? (values ? `${values.experience}xp` : '').padStart(6) : null,
-    columns.wide ? (values ? money(values.money) : '').padStart(7) : null,
+    columns.wide ? xp.padStart(6) : null,
+    columns.wide ? cash.padStart(7) : null,
     columns.sortedByLuck ? money(option.job.luckValue[1]).padStart(7) : null,
     String(option.job.laborPoints).padStart(5),
     travel.padStart(7),
@@ -262,19 +265,25 @@ function JobsPane(props: {
       const idx = start + index;
       const sel = idx === selected;
       const doable = optionsValue.job.jobPoints >= optionsValue.job.workPoints;
-      const mark = quest?.has(optionsValue.job.id)
-        ? createElement(Text, { color: 'magentaBright', bold: true }, '! ')
-        : '  ';
+      const mark = optionsValue.special
+        ? createElement(
+            Text,
+            { color: optionsValue.special === 'gold' ? 'yellowBright' : 'whiteBright', bold: true },
+            '* ',
+          )
+        : quest?.has(optionsValue.job.id)
+          ? createElement(Text, { color: 'magentaBright', bold: true }, '! ')
+          : '  ';
       return createElement(
         Text,
         defined({
-          key: optionsValue.job.id,
+          key: `${optionsValue.job.id}:${optionsValue.at?.x ?? 0},${optionsValue.at?.y ?? 0}`,
           inverse: sel && focused,
           color: doable ? undefined : 'gray',
           wrap: 'truncate',
         }),
         mark,
-        `${truncate(optionsValue.job.name, otherName).padEnd(otherName)} ${jobCells(optionsValue, { wide, sortedByLuck: luck })}`,
+        `${truncate(optionsValue.job.name, otherName).padEnd(otherName)} ${jobCells(state, optionsValue, { wide, sortedByLuck: luck })}`,
       );
     }),
     options.length === 0 ? createElement(Text, { dimColor: true }, emptyJobsMessage(filter, showAll)) : null,
@@ -294,9 +303,12 @@ function JobDetail({ option, state }: { option: JobOption | undefined; state: Ga
     );
   }
   const { job, at, way } = option;
+  const values = state.jobValues(option);
+  const rewardTier = motivationFactor(job.motivation);
+  const best = values.long ?? values.middle ?? values.short;
   const danger = job.danger === null ? '—' : `${job.danger}%`;
   const durRows = DURATION_KEYS.map((entryKey, index) => {
-    const jobInfo = job.values[entryKey];
+    const jobInfo = values[entryKey];
     if (!jobInfo) {
       return null;
     }
@@ -311,20 +323,35 @@ function JobDetail({ option, state }: { option: JobOption | undefined; state: Ga
     );
   });
   const quest = state.mapHighlight?.jobIds.has(job.id) ? state.mapHighlight.label : '';
+  const luckChance = best && best.luck > 0 ? ` · ${(best.luck * 100).toFixed(1)}% chance` : '';
   return createElement(
     Box,
     { flexDirection: 'column', borderStyle: 'round', borderColor: 'gray', paddingX: 1, flexShrink: 0 },
-    createElement(Text, { bold: true, wrap: 'truncate' }, `${job.name}  (lvl ${job.level})`),
     createElement(
       Text,
-      { wrap: 'truncate' },
-      `${job.laborPoints} LP · motiv ${Math.round((job.motivation ?? 0) * 100)}% · danger ${danger}`,
+      { bold: true, wrap: 'truncate' },
+      `${job.name}  (lvl ${job.level})${option.special ? `  · ${option.special === 'gold' ? 'GOLD' : 'SILVER'} JOB` : ''}`,
     ),
     createElement(
       Text,
       { wrap: 'truncate' },
+      `${job.laborPoints} LP · motiv ${Math.round(job.motivation * 100)}% · rewards ${Math.round(rewardTier * 100)}% · danger ${danger}`,
+    ),
+    option.pendingSpecial
+      ? createElement(Text, { dimColor: true, wrap: 'truncate' }, `Loading ${option.special} values…`)
+      : null,
+    option.special
+      ? createElement(
+          Text,
+          { color: option.special === 'gold' ? 'yellowBright' : 'whiteBright', wrap: 'truncate' },
+          `${option.special === 'gold' ? '+100' : '+50'}% XP, $ and product drops`,
+        )
+      : null,
+    createElement(
+      Text,
+      { wrap: 'truncate' },
       createElement(Text, { color: 'yellow' }, 'Luck '),
-      job.luckValue[1] > 0 ? money(job.luckValue[1]) : '—',
+      job.luckValue[1] > 0 ? `${money(job.luckValue[0])}–${money(job.luckValue[1])}${luckChance}` : '—',
     ),
     createElement(
       Text,
@@ -337,7 +364,7 @@ function JobDetail({ option, state }: { option: JobOption | undefined; state: Ga
       { color: 'magenta', wrap: 'truncate' },
       `Drops: ${
         state
-          .jobProducts(job)
+          .jobProducts(job, values)
           .map((pick) => `${pick.name}${pick.percent !== null ? ` ${pick.percent}%` : ''}`)
           .join(' · ') || '—'
       }`,
@@ -462,7 +489,18 @@ export function App({
 
   const options = useMemo(
     () => state.jobOptions(filter, { sort: jobSort, showAll: showAllJobs }),
-    [state, state.jobs, state.world, state.items, state.queue.length, filter, jobSort, showAllJobs],
+    [
+      state,
+      state.jobs,
+      state.jobsVersion,
+      state.specialVersion,
+      state.world,
+      state.items,
+      state.queue.length,
+      filter,
+      jobSort,
+      showAllJobs,
+    ],
   );
   const jobIdx = Math.min(jobSel, Math.max(0, options.length - 1));
   const queueIdx = Math.min(queueSel, Math.max(0, state.queue.length - 1));

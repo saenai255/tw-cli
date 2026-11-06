@@ -17,6 +17,8 @@ export interface SpecialJob extends Position {
   groupId: number;
   gold: boolean;
   silver: boolean;
+  /** When this tile reply last showed the job (persisted for a day by special-jobs.ts). */
+  seenAt: number;
 }
 export interface QuestGiver extends Position {
   names: string[];
@@ -121,6 +123,7 @@ export class TileCache {
                 groupId: Number(data.group_id),
                 gold: !!data.gold,
                 silver: !!data.silver,
+                seenAt: Date.now(),
               });
             } else if (data.count !== undefined && data.town_id === undefined) {
               this.crowds.set(key, { x: xCoord, y: yCoord, count: Number(data.count) });

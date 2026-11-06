@@ -11,9 +11,17 @@ import {
   goalWeights,
   type PlannedTask,
 } from './autopilot-config.ts';
-import { DEFAULT_MOTIVATION } from './calibration.ts';
 import { levelStartXp, type Position } from './character.ts';
-import { DURATION_KEYS, type DurationKey, isDoable, type JobInfo } from './jobs.ts';
+import {
+  DURATION_KEYS,
+  type DurationKey,
+  isDoable,
+  type JobDurationValues,
+  type JobInfo,
+  MOTIVATION_LOSS,
+  motivationFactor,
+  type SpecialKind,
+} from './jobs.ts';
 import { DEFAULT_WALK_ENERGY_PER_SECOND, type RouteNeed, runGains } from './route.ts';
 import { jobPost, sleepPost, walkPost } from './tasks.ts';
 import { projectTimeline, regenSeconds, type Timeline, type TimelineStart, type TimelineStep } from './timeline.ts';
@@ -90,6 +98,8 @@ export interface PlanInput {
   bankTownId?: number | undefined;
   /** Quest shopping / market pickups (Quests module): planned when the town is within `quests.buyTrip`. */
   buyTrips?: BuyTrip[] | undefined;
+  /** Discovered silver/gold jobs with the real job/job values for their location. */
+  specialJobs?: SpecialJobInput[] | undefined;
   /** Money the autopilot may still spend today. */
   budget: number;
   /** Step keys that keep failing: not planned. */
@@ -98,8 +108,6 @@ export interface PlanInput {
   maxJobs?: number | undefined;
   /** Exchange rates per goal (best gain per cost); a cancel check passes the current plan's so values compare. */
   rates?: Record<Goal, number> | undefined;
-  /** Calibrated motivation model (calibration.ts): lost per run, recovered per hour (fractions). */
-  motivation?: { perRun: number; perHour: number } | undefined;
   /** Calibrated multiplier for the danger → HP heuristic. */
   hpScale?: number | undefined;
 }
@@ -168,13 +176,27 @@ export function expectedHpLoss(danger: number | null, seconds: number, maxHealth
   return (danger / 100) * 0.1 * maxHealth * Math.min(1, seconds / 3600);
 }
 
+/** A discovered silver/gold job at its exact map location, with the values the game shows there. */
+export interface SpecialJobInput {
+  job: JobInfo;
+  at: Position;
+  special: SpecialKind;
+  values: Partial<Record<DurationKey, JobDurationValues>>;
+  valuesMotivation: number;
+}
+
 interface Candidate {
   job: JobInfo;
   duration: DurationKey;
+  /** Plan/failure key; special runs carry their kind and coordinates. */
+  key: string;
   at: Position;
   travel: number;
   energy: number;
   hpLoss: number;
+  /** The values this run pays at this location, before the projected motivation change. */
+  values: JobDurationValues;
+  special: SpecialKind | null;
   /** The job's own XP for this run (motivation applied), without quest rewards. */
   xp: number;
   gains: Record<string, number>;
@@ -226,7 +248,6 @@ export function planAutopilot(input: PlanInput): Plan {
   const planJobs = Math.max(1, input.maxJobs ?? MAX_JOBS);
   const maxTasks = planJobs * 3 + 4;
   const horizonEnd = start.now + Math.max(3600, cfg.cancel.horizon);
-  const motivation = input.motivation ?? DEFAULT_MOTIVATION;
   const hpScale = input.hpScale ?? 1;
   const slotCost = Math.max(0, cfg.slotCost ?? 0); // a queue slot's worth: short runs leave you idle when the TUI is closed
   let jobsPlanned = 0;
@@ -254,9 +275,9 @@ export function planAutopilot(input: PlanInput): Plan {
   const totals: Record<string, number> = Object.fromEntries(
     input.needs.map((routeNeed) => [routeNeed.key, routeNeed.amount]),
   );
-  const runs = new Map<number, number>();
+  const drop = new Map<number, number>();
   // Snapshot before the queued runs' gains are subtracted, so each queued run is scored against what was still needed then.
-  const beforeQueue = { remaining: { ...remaining }, runs: new Map<number, number>() };
+  const beforeQueue = { remaining: { ...remaining }, drop: new Map<number, number>() };
   // Jobs already queued drop items too: what they will bring is not needed again.
   for (const st of input.fixed) {
     if (st.kind !== 'job') {
@@ -267,8 +288,12 @@ export function planAutopilot(input: PlanInput): Plan {
     if (!job || !dur) {
       continue;
     }
-    runs.set(job.id, (runs.get(job.id) ?? 0) + 1);
-    for (const [entryKey, currentValue] of Object.entries(runGains(job, dur, input.needs))) {
+    drop.set(job.id, (drop.get(job.id) ?? 0) + MOTIVATION_LOSS[dur]);
+    const special = input.specialJobs?.find(
+      (entry) => entry.job.id === job.id && entry.at.x === st.at?.x && entry.at.y === st.at?.y,
+    );
+    const values = special?.values[dur] ?? job.values[dur];
+    for (const [entryKey, currentValue] of Object.entries(runGains(job, dur, input.needs, values))) {
       if ((remaining[entryKey] ?? 0) > 0) {
         remaining[entryKey] = Math.max(0, (remaining[entryKey] ?? 0) - currentValue);
       }
@@ -323,19 +348,85 @@ export function planAutopilot(input: PlanInput): Plan {
 
   /**
    * All job candidates from a state, scored by the priority against the exchange rates. `level` sets the
-   * level-up refund (a level-up refills energy: each XP point brings maxEnergy ÷ XP-per-level of it back);
-   * `hours` from now sets the projected motivation.
+   * level-up refund (a level-up refills energy: each XP point brings maxEnergy ÷ XP-per-level of it back).
+   * `done.drop` carries the motivation already spent by the queue and earlier planned runs.
    */
-  const candidates = (
-    from: Position,
-    health: number,
-    level = start.level,
-    hours = 0,
-    done = { remaining, runs },
-  ): Candidate[] => {
+  const candidates = (from: Position, health: number, level = start.level, done = { remaining, drop }): Candidate[] => {
     const list: Candidate[] = [];
     const xpPerLevel = levelStartXp(level + 1, start.maxLevel) - levelStartXp(level, start.maxLevel);
     const refundPerXp = xpPerLevel > 0 ? start.maxEnergy / xpPerLevel : 0;
+
+    /** Scores one run at one location. `values` are the rewards the game shows there now. */
+    const addCandidate = (
+      job: JobInfo,
+      duration: DurationKey,
+      key: string,
+      at: Position,
+      travel: number,
+      values: JobDurationValues,
+      special: SpecialKind | null,
+    ): void => {
+      if (skip.has(key)) {
+        return;
+      }
+      const hpLoss = expectedHpLoss(job.danger, values.duration, start.maxHealth) * hpScale;
+      // Never plan a run that could take HP under the sleep threshold, HP sleeps on or off. A run that costs
+      // no HP is always fine: under the threshold with no hotel, safe jobs go on while HP regenerates.
+      if (hpLoss > 0 && health - hpLoss < cfg.hp.sleepBelow * start.maxHealth) {
+        return;
+      }
+      const gains = runGains(job, duration, input.needs, values);
+      // Quest progress (weighted by deadline), plus the share of the quests' rewards this progress earns.
+      let quests = 0;
+      let rewardXp = 0;
+      let rewardMoney = 0;
+      for (const [entryKey, currentValue] of Object.entries(gains)) {
+        const rem = done.remaining[entryKey] ?? 0;
+        if (rem <= 1e-9) {
+          continue;
+        }
+        const got = Math.min(rem, currentValue);
+        const entry = needInfo.get(entryKey);
+        quests += (got / (totals[entryKey] || 1)) * (entry?.weight ?? 1);
+        rewardXp += got * (entry?.xpPerUnit ?? 0);
+        rewardMoney += got * (entry?.moneyPerUnit ?? 0);
+      }
+      // Motivation only changes at 25 % breakpoints; products do not depend on it.
+      const baseFactor = motivationFactor(job.motivation);
+      const entryFactor = motivationFactor(Math.max(0, job.motivation - (done.drop.get(job.id) ?? 0)));
+      const fade = baseFactor > 0 ? entryFactor / baseFactor : 0;
+      const xp = values.experience * fade;
+      const products = (values.items ?? []).reduce(
+        (accumulator, current) => accumulator + current.expected * input.itemValue(current.itemId),
+        0,
+      );
+      const hpSeconds = hpLoss > 0 ? regenSeconds(0, hpLoss, start.maxHealth, start.healthRegen) : 0;
+      // Energy net of the level-up refund; at least a quarter (the refill only tops up to the max).
+      const energy = Math.max(0.25 * values.energy, values.energy - (xp + rewardXp) * refundPerXp);
+      const extra = (Number.isFinite(hpSeconds) ? hpSeconds : 0) + slotCost;
+      const cost =
+        cfg.per === 'energy'
+          ? energy + (travel + extra) * walkWeight
+          : runSeconds(values.duration, energy) + travel + extra;
+      list.push({
+        job,
+        duration,
+        key,
+        at,
+        travel,
+        energy: values.energy,
+        hpLoss,
+        values,
+        special,
+        xp,
+        gains,
+        cost: Math.max(cost, 1e-6),
+        score: 0,
+        by: { quests: 0, xp: 0, money: 0, products: 0 },
+        raw: { quests, xp: xp + rewardXp, money: values.money * fade + rewardMoney, products },
+      });
+    };
+
     for (const job of input.jobs) {
       if (!isDoable(job) || excluded.has(job.id)) {
         continue;
@@ -357,71 +448,36 @@ export function planAutopilot(input: PlanInput): Plan {
         }
       }
       for (const duration of DURATION_KEYS) {
-        const jobInfo = job.values[duration];
-        if (!jobInfo) {
+        const values = job.values[duration];
+        if (!values) {
           continue;
         }
-        if (skip.has(`job:${job.id}:${duration}`)) {
-          continue;
-        }
-        const hpLoss = expectedHpLoss(job.danger, jobInfo.duration, start.maxHealth) * hpScale;
-        // Never plan a run that could take HP under the sleep threshold, HP sleeps on or off. A run that costs
-        // no HP is always fine: under the threshold with no hotel, safe jobs go on while HP regenerates.
-        if (hpLoss > 0 && health - hpLoss < cfg.hp.sleepBelow * start.maxHealth) {
-          continue;
-        }
-        const gains = runGains(job, duration, input.needs);
-        // Quest progress (weighted by deadline), plus the share of the quests' rewards this progress earns.
-        let quests = 0;
-        let rewardXp = 0;
-        let rewardMoney = 0;
-        for (const [entryKey, currentValue] of Object.entries(gains)) {
-          const rem = done.remaining[entryKey] ?? 0;
-          if (rem <= 1e-9) {
-            continue;
-          }
-          const got = Math.min(rem, currentValue);
-          const entry = needInfo.get(entryKey);
-          quests += (got / (totals[entryKey] || 1)) * (entry?.weight ?? 1);
-          rewardXp += got * (entry?.xpPerUnit ?? 0);
-          rewardMoney += got * (entry?.moneyPerUnit ?? 0);
-        }
-        // Motivation falls per run and recovers per hour; pay scales with it (heuristic until calibrated).
-        const baseMotivation = job.motivation > 0 ? job.motivation : 1;
-        const entryValue = Math.min(
-          1,
-          baseMotivation - motivation.perRun * (done.runs.get(job.id) ?? 0) + motivation.perHour * hours,
-        );
-        const fade = Math.max(0.3, entryValue / baseMotivation);
-        const xp = jobInfo.experience * fade;
-        const products = (jobInfo.items ?? []).reduce(
-          (accumulator, current) => accumulator + current.expected * input.itemValue(current.itemId),
-          0,
-        );
-        const hpSeconds = hpLoss > 0 ? regenSeconds(0, hpLoss, start.maxHealth, start.healthRegen) : 0;
-        // Energy net of the level-up refund; at least a quarter (the refill only tops up to the max).
-        const energy = Math.max(0.25 * jobInfo.energy, jobInfo.energy - (xp + rewardXp) * refundPerXp);
-        const extra = (Number.isFinite(hpSeconds) ? hpSeconds : 0) + slotCost;
-        const cost =
-          cfg.per === 'energy'
-            ? energy + (travel + extra) * walkWeight
-            : runSeconds(jobInfo.duration, energy) + travel + extra;
-        list.push({
-          job,
-          duration,
-          at,
-          travel,
-          energy: jobInfo.energy,
-          hpLoss,
-          xp,
-          gains,
-          cost: Math.max(cost, 1e-6),
-          score: 0,
-          by: { quests: 0, xp: 0, money: 0, products: 0 },
-          raw: { quests, xp: xp + rewardXp, money: jobInfo.money * fade + rewardMoney, products: products * fade },
-        });
+        addCandidate(job, duration, `job:${job.id}:${duration}`, at, travel, values, null);
       }
     }
+
+    for (const special of input.specialJobs ?? []) {
+      if (!isDoable(special.job) || excluded.has(special.job.id)) {
+        continue;
+      }
+      const travel = wayTime(from, special.at);
+      for (const duration of DURATION_KEYS) {
+        const values = special.values[duration];
+        if (!values) {
+          continue;
+        }
+        addCandidate(
+          special.job,
+          duration,
+          `job:${special.job.id}:${duration}:${special.special}:${special.at.x},${special.at.y}`,
+          special.at,
+          travel,
+          values,
+          special.special,
+        );
+      }
+    }
+
     // Each goal in units of its exchange rate (the best rate at the plan's start), so a crumb of quest
     // progress stays a crumb and values of different plans compare. A goal with no rate yet: this list's best.
     const best = bestRates(list);
@@ -692,20 +748,28 @@ export function planAutopilot(input: PlanInput): Plan {
       return;
     }
     const prev = tl.steps[index - 1];
+    const special = input.specialJobs?.find(
+      (entry) => entry.job.id === job.id && entry.at.x === st.at?.x && entry.at.y === st.at?.y,
+    );
+    const values = special?.values[dur] ?? job.values[dur];
     const foundValue = candidates(
       prev?.at ?? start.at,
       prev?.health ?? start.health,
       prev?.level ?? start.level,
-      Math.max(0, self.depart - start.now) / 3600,
       beforeQueue,
-    ).find((xCoord) => xCoord.job.id === job.id && xCoord.duration === dur);
+    ).find(
+      (xCoord) =>
+        xCoord.job.id === job.id &&
+        xCoord.duration === dur &&
+        (!special || (xCoord.special === special.special && xCoord.at.x === special.at.x)),
+    );
     const inside =
       self.end <= horizonEnd ? 1 : Math.max(0, (horizonEnd - self.start) / Math.max(1, self.end - self.start));
     if (foundValue) {
       queuedValue += foundValue.score * foundValue.cost * inside;
     }
-    beforeQueue.runs.set(job.id, (beforeQueue.runs.get(job.id) ?? 0) + 1);
-    for (const [entryKey, currentValue] of Object.entries(runGains(job, dur, input.needs))) {
+    beforeQueue.drop.set(job.id, (beforeQueue.drop.get(job.id) ?? 0) + MOTIVATION_LOSS[dur]);
+    for (const [entryKey, currentValue] of Object.entries(runGains(job, dur, input.needs, values))) {
       if ((beforeQueue.remaining[entryKey] ?? 0) > 0) {
         beforeQueue.remaining[entryKey] = Math.max(0, (beforeQueue.remaining[entryKey] ?? 0) - currentValue);
       }
@@ -777,11 +841,11 @@ export function planAutopilot(input: PlanInput): Plan {
     if (!mods.jobs) {
       break;
     }
-    const candidate = candidates(source.at, source.health, source.level, Math.max(0, tl.end - start.now) / 3600)[0];
+    const candidate = candidates(source.at, source.health, source.level)[0];
     if (!candidate) {
       break;
     }
-    if (useMod && cfg.consumables.motivation && candidate.job.motivation < 0.75) {
+    if (useMod && cfg.consumables.motivation && candidate.job.motivation <= 0.75) {
       const item = pickItem('motivation', 0.01);
       if (
         item &&
@@ -831,34 +895,32 @@ export function planAutopilot(input: PlanInput): Plan {
         continue;
       }
     }
-    const jobInfo = candidate.job.values[candidate.duration];
-    if (!jobInfo) {
-      continue;
-    }
+    const values = candidate.values;
     const goal = (Object.keys(candidate.by) as Goal[]).reduce((accumulator, current) =>
       candidate.by[current] > candidate.by[accumulator] ? current : accumulator,
     );
     const forQuests = questParts(candidate.gains);
+    const special = candidate.special ? ` · ${candidate.special} job` : '';
     push({
       module: 'jobs',
-      key: `job:${candidate.job.id}:${candidate.duration}`,
+      key: candidate.key,
       step: {
         kind: 'job',
-        title: candidate.job.name,
+        title: `${candidate.job.name}${candidate.special ? ` (${candidate.special})` : ''}`,
         jobId: candidate.job.id,
         at: candidate.at,
-        duration: jobInfo.duration,
-        energy: jobInfo.energy,
-        xp: jobInfo.experience,
-        money: jobInfo.money,
+        duration: values.duration,
+        energy: values.energy,
+        xp: values.experience,
+        money: values.money,
         hpLoss: candidate.hpLoss,
       },
-      post: jobPost(candidate.job.id, candidate.at, jobInfo.duration),
+      post: jobPost(candidate.job.id, candidate.at, values.duration),
       value: candidate.score * candidate.cost,
       why:
         goal === 'quests' && forQuests.length
-          ? `quest: ${forQuests.join('; ')}`
-          : `best ${GOAL_WORD[goal]} per ${cfg.per === 'energy' ? 'energy' : 'hour'}${forQuests.length ? ` · also ${forQuests.join('; ')}` : ''}`,
+          ? `quest: ${forQuests.join('; ')}${special}`
+          : `best ${GOAL_WORD[goal]} per ${cfg.per === 'energy' ? 'energy' : 'hour'}${forQuests.length ? ` · also ${forQuests.join('; ')}` : ''}${special}`,
     });
     const last = tl.steps[tl.steps.length - 1];
     if (!last) {
@@ -868,7 +930,7 @@ export function planAutopilot(input: PlanInput): Plan {
     const inside =
       last.end <= horizonEnd ? 1 : Math.max(0, (horizonEnd - last.start) / Math.max(1, last.end - last.start));
     value += candidate.score * candidate.cost * inside;
-    runs.set(candidate.job.id, (runs.get(candidate.job.id) ?? 0) + 1);
+    drop.set(candidate.job.id, (drop.get(candidate.job.id) ?? 0) + MOTIVATION_LOSS[candidate.duration]);
     jobsPlanned++;
     for (const [gainKey, gainValue] of Object.entries(candidate.gains)) {
       if ((remaining[gainKey] ?? 0) > 1e-9) {
