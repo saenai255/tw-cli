@@ -28,8 +28,11 @@ export interface AutopilotConfig {
   hp: { sleepBelow: number; wakeAbove: number };
   /** Hotel and bank: own town when it is this close (s of walking). */
   ownTownWithin: number;
-  /** Job rules: `special` lets the planner use discovered silver/gold jobs. */
-  jobs: { special: boolean };
+  /**
+   * Job rules: `special` lets the planner use discovered silver/gold jobs; `moveMargin` is how much better
+   * a job elsewhere must be before the plan walks there.
+   */
+  jobs: { special: boolean; moveMargin: number };
   bank: { above: number; maxDetour: number };
   consumables: { energy: boolean; health: boolean; motivation: boolean; reserve: number };
   /**
@@ -79,7 +82,7 @@ export const DEFAULT_CONFIG: AutopilotConfig = {
   wake: { levelUp: true, stretch: false, hpSafe: true, full: false },
   hp: { sleepBelow: 0.5, wakeAbove: 0.7 },
   ownTownWithin: 3600,
-  jobs: { special: false },
+  jobs: { special: false, moveMargin: 0.2 },
   bank: { above: 4500, maxDetour: 1800 },
   consumables: { energy: true, health: true, motivation: false, reserve: 2 },
   quests: {
@@ -94,7 +97,7 @@ export const DEFAULT_CONFIG: AutopilotConfig = {
     walkValue: 15,
   },
   duels: { forXp: true, levelMargin: 0 },
-  cancel: { horizon: 6 * 3600, margin: 0.1, cooldown: 900, walkSaved: 600, sameWithin: 0.02 },
+  cancel: { horizon: 6 * 3600, margin: 0.2, cooldown: 900, walkSaved: 600, sameWithin: 0.02 },
   slotCost: 600,
   spend: { daily: 1000 },
 };

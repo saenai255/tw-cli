@@ -23,6 +23,7 @@ import { baseId } from './items.ts';
 import { type DurationKey, isDoable, type JobDurationValues, wayTime } from './jobs.ts';
 import { MARKET_TTL_MS, SHOP_TTL_MS, where } from './quest-buy.ts';
 import type { GameState } from './state.ts';
+import { TaskLimitError } from './tasks.ts';
 import { deposit, fetchMobileTrader, fetchShop, MarketApi, SHOPS, type Shop, useItem } from './trade.ts';
 
 const BACKOFF_S = [60, 300, 900] as const;
@@ -34,6 +35,8 @@ const MIN_MEASURED_HOURS = 0.25;
 const HOTEL_TTL_MS = 10 * 60_000;
 const CHECK_MS = 2_000;
 const CANCEL_CHECK_MS = 30_000;
+/** When the server says the queue is full, wait for the earliest task to end, at most this long. */
+const QUEUE_FULL_MAX_WAIT_MS = 60_000;
 /** A special job detail older than this is re-read before the job is queued (used-up gold jobs, daily reset). */
 const SPECIAL_FRESH_MS = 30 * 60_000;
 /** work/index re-read: job values and motivation change as jobs are done and reset daily. */
@@ -49,6 +52,8 @@ export class AutopilotRunner {
   private state: GameState;
   private lastPrint = '';
   private lastCheck = 0;
+  /** The server refused an add because the queue is full: do not try another job until this time. */
+  private queueFullUntil = 0;
   private hotels = new Map<number, { at: number; option: HotelOption | null }>();
   private failures = new Map<string, { count: number; until: number }>();
   private wakes = new Map<number, { energy: number; health: number }>();
@@ -259,6 +264,7 @@ export class AutopilotRunner {
       items: this.consumables().map((consumable) => [consumable.itemId, consumable.count]),
       skip: [...this.skipped()],
       budget: this.budget(),
+      hpScale: Math.round(this.state.calibration.hpScale * 10) / 10,
       buy: [gameState.buyCatalog.version, gameState.autopilot.pickups.length],
     };
   }
@@ -355,7 +361,7 @@ export class AutopilotRunner {
       buyTrips: gameState.buyTrips(),
       budget: this.budget(),
       skip: this.skipped(),
-      hpScale: gameState.calibration.hpScale,
+      hpScale: Math.round(gameState.calibration.hpScale * 10) / 10,
     };
   }
 
@@ -916,6 +922,21 @@ export class AutopilotRunner {
     );
   }
 
+  /** The server refused an add because no assignment fits: wait for a slot, not for a particular job. */
+  private async waitForQueue(errors: string[]): Promise<void> {
+    const now = Date.now();
+    const earliest = this.state.queue.reduce((minimum, task) => Math.min(minimum, task.end), Number.POSITIVE_INFINITY);
+    const waitMs = Number.isFinite(earliest) ? Math.max(0, earliest * 1000 - now) + 1000 : QUEUE_FULL_MAX_WAIT_MS;
+    this.queueFullUntil = now + Math.min(QUEUE_FULL_MAX_WAIT_MS, waitMs);
+    this.state.debug.add('autopilot', 'Queue full on the server: waiting for a free assignment', {
+      queue: this.state.queue.length,
+      taskLimit: this.state.taskLimit,
+      waitMs: this.queueFullUntil - now,
+      errors,
+    });
+    await this.state.refreshQueue();
+  }
+
   /** Sends the next planned tasks the queue has room for; runs an on-the-spot action when its turn comes. */
   private async carryOut(): Promise<void> {
     const gameState = this.state;
@@ -952,6 +973,13 @@ export class AutopilotRunner {
       gameState.debug.add('autopilot', `Carry out: ${first.step.title}`, { task: first, why: first.why });
       await this.act(first);
       return;
+    }
+    if (Date.now() < this.queueFullUntil) {
+      return void gameState.debug.once('queuefull', 'autopilot', 'Carry out: server queue full, waiting', {
+        until: new Date(this.queueFullUntil).toISOString(),
+        queue: gameState.queue.length,
+        taskLimit: gameState.taskLimit,
+      });
     }
     const free = gameState.taskLimit - gameState.queue.length;
     if (free <= 0) {
@@ -1055,6 +1083,11 @@ export class AutopilotRunner {
       if (res.added.length) {
         gameState.info(`Autopilot: queued ${res.added.map((task) => task.title).join(', ')}. ${batch[0]?.why ?? ''}`);
       }
+      if (res.full) {
+        await this.waitForQueue(res.errors);
+        this.replanNext('queue full');
+        return;
+      }
       const failed = batch.slice(res.added.length)[0];
       // "You need at least N more energy points": our energy estimate ran ahead of the server's. Correct it and
       // replan (towards a sleep or an item) instead of backing the job off as if it had failed.
@@ -1069,6 +1102,11 @@ export class AutopilotRunner {
       }
       this.replan('queued');
     } catch (err) {
+      if (err instanceof TaskLimitError) {
+        await this.waitForQueue([errorMessage(err)]);
+        this.replanNext('queue full');
+        return;
+      }
       const head = batch[0];
       if (head) {
         this.fail(head.key, `${head.step.title}: ${errorMessage(err)}`);

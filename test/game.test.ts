@@ -200,6 +200,9 @@ test('motivation breakpoints and rescaling: 100/75/50/25/0, money rounds up, dro
   assert.equal(scaled.experience, 888);
   assert.equal(scaled.luck, 1.5);
   assert.deepEqual(scaled.items, [{ itemId: 1, expected: 0.31, percent: 31 }]);
+  const base = { ...scaled, experience: 200, money: 0 };
+  assert.equal(scaleJobValues(base, 1, 0.74).experience, 150);
+  assert.equal(scaleJobValues(base, 1, 0.5).experience, 100);
 });
 
 test('task/add body matches jQuery serialisation of TaskQueue.sendAdd', () => {

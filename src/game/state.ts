@@ -140,7 +140,7 @@ const ATTACK_MIN_DROP_FRACTION = 0.01;
 /** A special reported as gone is not asked about again for this long. */
 const SPECIAL_MISS_TTL_MS = 3_600_000;
 /** A special's real values are re-read after this long (values and the job can change). */
-const SPECIAL_FRESH_MS = 2 * 3_600_000;
+const SPECIAL_FRESH_MS = 30 * 60_000;
 /** The autopilot does not prefetch specials further than this walk from the queue end. */
 const SPECIAL_PREFETCH_TRAVEL = 2 * 3_600;
 

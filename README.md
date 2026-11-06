@@ -71,7 +71,9 @@ Plays the character while the TUI is open (`g a`; `R` runs / pauses, paused only
 part is a toggle with safe defaults, and the plan pane says what it will do next and why.
 
 - **Jobs** by your ranked goals (quests, XP, money, products), planned 6 h ahead, per energy or per hour.
-  Reward values follow the game's 25 % motivation breakpoints, and each run's motivation loss is tracked.
+  Reward values follow the game's 25 % motivation breakpoints, and each run's motivation loss is tracked. It
+  stays at the current spot unless another is 20 % better, and a server-full queue is waited out, not retried
+  job by job.
 - **Silver/gold jobs** discovered on the map can be planned at their exact location with the real
   `job/job` values; the toggle is off by default and the autopilot does not scan the map itself.
 - **Sleep** when out of energy or low on HP, and wakes early once energy is enough to level up or for the next

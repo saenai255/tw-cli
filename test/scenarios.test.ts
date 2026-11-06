@@ -889,6 +889,47 @@ test('S2 a special job does not scale its products with motivation', () => {
   assert.equal((pick.tasks[0]!.step as { xp: number }).xp, 0);
 });
 
+test('S3 a silver job at 74 % motivation still beats a full normal job: 150 vs 118 XP', () => {
+  const normal = job(1, { long: [118, 0] });
+  const special = {
+    job: job(2, { long: [200, 0], motivation: 0.74 }),
+    at: point(0),
+    special: 'silver',
+    values: {
+      long: { duration: 3600, energy: 12, experience: 150, money: 0, luck: 0, items: [] },
+    },
+    valuesMotivation: 0.74,
+  };
+  const pick = plan({ jobs: [normal], specialJobs: [special], maxJobs: 1 });
+  assert.equal(pick.tasks[0]!.key, 'job:2:long:silver:0,0');
+});
+
+test('S4 at 50 % motivation silver pays 100 XP, under the 118 XP normal job', () => {
+  const normal = job(1, { long: [118, 0] });
+  const special = {
+    job: job(2, { long: [200, 0], motivation: 0.5 }),
+    at: point(0),
+    special: 'silver',
+    values: {
+      long: { duration: 3600, energy: 12, experience: 100, money: 0, luck: 0, items: [] },
+    },
+    valuesMotivation: 0.5,
+  };
+  const pick = plan({ jobs: [normal], specialJobs: [special], maxJobs: 1 });
+  assert.equal(pick.tasks[0]!.key, 'job:1:long');
+});
+
+test('S5 same-spot jobs win unless another spot is more than 20 % better', () => {
+  const moneyFirst = (configValue: typeof DEFAULT_CONFIG) => {
+    configValue.priority = ['money', 'xp', 'quests', 'products'];
+  };
+  const same = job(1, { long: [0, 100] });
+  const slightlyBetter = job(2, { long: [0, 120], at: [point(10)] });
+  assert.equal(plan({ jobs: [same, slightlyBetter], maxJobs: 1, config: moneyFirst }).tasks[0]!.key, 'job:1:long');
+  const clearlyBetter = job(3, { long: [0, 130], at: [point(10)] });
+  assert.equal(plan({ jobs: [same, clearlyBetter], maxJobs: 1, config: moneyFirst }).tasks[0]!.key, 'job:3:long');
+});
+
 test('I1 a sleep you inserted now comes first', () => {
   const pick = plan({ jobs: oneJob, hotels: room, rules: { inserts: [{ at: START_TIME, kind: 'sleep' }] } });
   assert.equal(pick.tasks[0]!.step.kind, 'sleep');
@@ -957,11 +998,15 @@ test('F5 nothing to plan: the queue is still projected', () => {
 
 // ---- Cancelling the queue -----------------------------------------------------------------------------------
 
-const cancelCfg = DEFAULT_CONFIG.cancel; // margin 10 %, same within 2 %, 10 min less walking
+const cancelCfg = DEFAULT_CONFIG.cancel; // margin 20 %, same within 2 %, 10 min less walking
 const cut = (from: number, value: number, walk = 0) => ({ from, value, walk });
 
-test('C1 a cut 20 % better: cancel', () => {
-  assert.equal(chooseCancel(cut(4, 10), [cut(1, 12)], cancelCfg)?.why, 'better');
+test('C1 a cut 25 % better: cancel', () => {
+  assert.equal(chooseCancel(cut(4, 10), [cut(1, 12.5)], cancelCfg)?.why, 'better');
+});
+
+test('C1b exactly 20 % better: keep (the margin is strict)', () => {
+  assert.equal(chooseCancel(cut(4, 10), [cut(1, 12)], cancelCfg), null);
 });
 
 test('C2 5 % better, same walking: keep (not worth the churn)', () => {
@@ -983,7 +1028,7 @@ test('C5 3 % worse even with 30 min less walking: keep', () => {
 });
 
 test('C6 two cuts equally good: cancel less (the later cut)', () => {
-  assert.equal(chooseCancel(cut(4, 10), [cut(1, 12), cut(2, 12)], cancelCfg)?.from, 2);
+  assert.equal(chooseCancel(cut(4, 10), [cut(1, 12.5), cut(2, 12.5)], cancelCfg)?.from, 2);
 });
 
 test('C7 the queue is worth nothing and a fresh plan is worth something: cancel', () => {
@@ -991,7 +1036,7 @@ test('C7 the queue is worth nothing and a fresh plan is worth something: cancel'
 });
 
 test('C8 a better cut beats a less-walking cut', () => {
-  const result = chooseCancel(cut(4, 10, 3000), [cut(1, 12, 3000), cut(3, 10, 1000)], cancelCfg);
+  const result = chooseCancel(cut(4, 10, 3000), [cut(1, 12.5, 3000), cut(3, 10, 1000)], cancelCfg);
   assert.equal(result?.from, 1);
   assert.equal(result?.why, 'better');
 });

@@ -17,6 +17,14 @@ test("calibration: drops blend reports with the game's number; HP and rooms from
   assert.equal(candidate.hpScale, 1);
   candidate.addHp(10, 30);
   assert.ok(candidate.hpScale > 1 && candidate.hpScale < 3, 'pulled toward 3× by one run');
+  const capped = new Calibration(null);
+  capped.addHp(1, 100);
+  assert.equal(capped.hpScale, 3, 'HP scale never exceeds 3');
+  const floored = new Calibration(null);
+  for (let index = 0; index < 10; index++) {
+    floored.addHp(10, 0);
+  }
+  assert.equal(floored.hpScale, 0.5, 'HP scale never drops below 0.5');
   assert.equal(candidate.roomScale, 1);
   candidate.addRoom(0.2);
   assert.ok(Math.abs(candidate.roomScale - 0.6) < 1e-9);

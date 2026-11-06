@@ -2051,6 +2051,32 @@ test('autopilot runner: queues what the energy covers, sleeps when out, wakes at
     'no resend while backing off',
   );
 
+  // Server says the whole queue is full: wait for a slot; do not fail the job or cycle the plan.
+  routes['/game.php?window=task&action=add'] = () => ({
+    tasks: { 0: { error: true, msg: 'You cannot add any more assignments!' } },
+  });
+  gameState.queue = [];
+  gameState.character.setEnergy(100);
+  (gameState.runner as any).failures.clear();
+  (gameState.runner as any).queueFullUntil = 0;
+  (gameState.runner as any).lastCheck = 0;
+  const beforeFull = calls.filter((candidate) => candidate.url.includes('action=add')).length;
+  await gameState.runner.step();
+  assert.equal(
+    calls.filter((candidate) => candidate.url.includes('action=add')).length,
+    beforeFull + 1,
+    'one add attempt sees the full queue',
+  );
+  assert.equal((gameState.runner as any).failures.size, 0, 'queue full is not a job failure');
+  assert.ok((gameState.runner as any).queueFullUntil > Date.now(), 'waits for a slot');
+  (gameState.runner as any).lastCheck = 0;
+  await gameState.runner.step();
+  assert.equal(
+    calls.filter((candidate) => candidate.url.includes('action=add')).length,
+    beforeFull + 1,
+    'no retry while the queue-full cooldown runs',
+  );
+
   // Paused: replans but sends nothing.
   gameState.updateAutopilot((autopilotFile) => (autopilotFile.config.running = false));
   const before = calls.length;

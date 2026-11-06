@@ -88,7 +88,14 @@ export function sleepPost(townId: number, room: string): Record<string, FormValu
 export interface AddResult {
   added: QueuedTask[];
   errors: string[];
+  /** The server refused because the whole task queue is full (not this job in particular). */
+  full: boolean;
   energy?: number | undefined;
+}
+
+/** Server reply when no more assignments fit; it is queue state, not a failure of the job we tried. */
+export function isQueueFullMessage(message: string): boolean {
+  return /cannot add any more assignments/i.test(message);
 }
 
 export class TaskLimitError extends Error {}
@@ -123,7 +130,7 @@ export class TaskApi {
       tasks[String(queueLength + index)] = pick;
     });
     const json = await this.client.remoteCall('task', 'add', { tasks });
-    const result: AddResult = { added: [], errors: [] };
+    const result: AddResult = { added: [], errors: [], full: false };
     for (const jsonValue of vals(json.tasks).map(obj)) {
       if (jsonValue.task) {
         result.added.push(parseQueueEntry(obj(jsonValue.task)));
@@ -135,6 +142,7 @@ export class TaskApi {
     if (json.error && json.msg) {
       result.errors.push(String(json.msg));
     }
+    result.full = result.errors.some(isQueueFullMessage);
     if (json.energy !== undefined) {
       result.energy = Number(json.energy);
     }

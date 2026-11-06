@@ -26,6 +26,8 @@ screen (`g a`). Spec agreed with the user in a grill session ("Decisions").
   (pause + clear the plan; rules stay), `Space`/`Enter` toggle, `←→`/`+-` values, `J K` reorder priority.
 - `use discovered silver & gold jobs` (off): plan specials the map has found at their exact location, with the
   real `job/job` values. It does not scan the map itself; see "Silver/gold jobs".
+- `switch spot only when better by` (20 %): stay at the queue-end location unless a job elsewhere scores clearly
+  better; stops marginal walks like Peace Officer → Banker for +9.7 % XP/energy.
 - `Q` queue view: queued + planned rows (ETA, travel, energy, HP, XP, $, module). `c` cancel a queued task,
   `d` exclude a planned job / remove an inserted row, `u` clear exclusions, `s`/`b` insert a sleep / bank stop at
   a row's time, `J K` move an inserted row. It captures all keys while open (Esc closes).
@@ -119,6 +121,8 @@ screen (`g a`). Spec agreed with the user in a grill session ("Decisions").
   0.25, 0.06, 0.015) or custom weights. Exchange rates = best gain per cost per goal from where the server queue
   ends, fixed for the whole plan (`plan.rates`) and passed to the cancel check's alternatives, so values compare
   and the last crumbs of a need lose to the next goal.
+- **Staying put**: the best candidate at the queue-end spot is preferred unless the best one elsewhere is more
+  than `jobs.moveMargin` (20 %) better. Travel already costs energy/time, so this stops marginal moves.
 - **Cost**: per energy: net energy + (travel + HP regen time + slot cost) × energy regenerated per second. Per
   hour: `min(max(duration, net energy ÷ base regen), duration + net energy ÷ best room rate)` + travel + HP regen
   time + slot cost. Net energy = energy − XP × maxEnergy ÷ XP-per-level (a level-up refills energy), at least a
@@ -160,11 +164,11 @@ loading until then), and the autopilot loads the discovered ones within a 2 h wa
 time, while `use discovered silver & gold jobs` is on (off by default). The planner treats each special as a
 location-specific candidate with its own key, coordinates and post; the normal job remains available at its
 other locations. Values are not computed: +50 % / +100 % are only the documented boost, the game's own
-`job/job` reply is what we use. A special seen more than 30 min ago is re-read once before it is queued; if it
-is gone, the plan is rebuilt. Product drops are not affected by motivation. Discovered positions and their raw
-`job/job` replies are saved in `<config dir>/cache/special-jobs-<host>.json` for 24 h and loaded at startup, so a
-restart does not need the map or another detail request; entries older than a day, or no longer in a refreshed
-tile, are dropped.
+`job/job` reply is what we use. Special values are refreshed every 30 min while the toggle is on, and a special
+older than 30 min is re-read once before it is queued; if it is gone, the plan is rebuilt. Product drops are not
+affected by motivation. Discovered positions and their raw `job/job` replies are saved in
+`<config dir>/cache/special-jobs-<host>.json` for 24 h and loaded at startup, so a restart does not need the map
+or another detail request; entries older than a day, or no longer in a refreshed tile, are dropped.
 
 ## Scenarios (`test/scenarios.test.ts`)
 
@@ -182,7 +186,8 @@ samples. Logged to the debug log (`Calibration: …`); `runner.context().calibra
 - **Drops** per job + duration: every new job report (page 1 of the report list, on the "new report" push) is
   read once with `show_report` (`parseJobReport`: `reportInfo.job_id`, `items`, run length from the page).
 - **HP loss**: the first server health after a dangerous job ends (live update or sync) vs the regen estimate;
-  drops over 30 % of max HP count as attacks and are skipped. Gives `hpScale`.
+  drops over 30 % of max HP count as attacks and are skipped. Gives `hpScale`, capped to 0.5–3 and passed to the
+  fingerprint rounded to one decimal, so tiny calibration changes do not replan.
 - **Hotel rooms**: a sleep the autopilot queued and cancelled at its wake target: energy gained per hour vs the
   rate read from the hotel gives `roomScale` (only uncapped sleeps of 15+ min).
 - **Level-ups**: whether energy was full after each (`levelUps.refilled / seen`); the planner assumes it is.
@@ -201,6 +206,9 @@ town you stand in, use an item, buy quest items).
 - Failures: retry after 1 → 5 → 15 min; after 3 the step key is left out of plans. Session errors pause.
   Exception: a job refused for "N more energy points" is not a failure. Our energy estimate was ahead of the
   server's, so local energy is set to `job energy − N` and the plan is redone.
+- **Server queue full** ("You cannot add any more assignments!") is queue state, not a job failure: no failure
+  key is added, the queue is refreshed, and adding pauses until the earliest queued task ends (max 60 s). This
+  prevents the old loop that cycled the whole 200-task plan once per rejected job.
 - Cancel-for-better counts each cancelled job's energy refund at its queued duration's cost, not the long job's.
 - Spend cap: hotel rooms and quest purchases count toward `spend.daily` (UTC day). Quest items: shops + mobile
   trader ≤ `quests.buyLimit` per quest, market ≤ `quests.marketLimit` per quest (counted on what is still to buy).
@@ -227,7 +235,8 @@ town you stand in, use an item, buy quest items).
 TUI only (core has no UI deps) · may cancel anything, running tasks included, when the plan is better by the
 margin · manual actions are replanned around unless paused · resume on launch · ranked priority, optional custom
 weights · own-town hotel/bank within 1 h, else by cost · bank detour ≤ 30 min else the next town · cancel margin
-10 % over 6 h, 15 min cooldown · quests: all but excluded chains, time-limited yes, repeatables off · daily cap
+20 % over 6 h, 15 min cooldown · jobs at the queue-end spot stay unless another spot is 20 % better · server queue
+full waits for the earliest task end (max 60 s) · quests: all but excluded chains, time-limited yes, repeatables off · daily cap
 $1,000 · quest items no job drops are bought: shops (any town in reach) and the mobile trader ≤ $3,000 per quest,
 the market only under $5,000 (its trip to collect counted), trips ≤ 1 h, a minute of walking worth $15 when
 comparing sources · consumables valued at shop price · retries 1/5/15 min, 3 strikes · HP < 50 % sleep or item, up at ≥ 70 %

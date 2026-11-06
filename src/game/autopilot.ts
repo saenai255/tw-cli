@@ -841,7 +841,17 @@ export function planAutopilot(input: PlanInput): Plan {
     if (!mods.jobs) {
       break;
     }
-    const candidate = candidates(source.at, source.health, source.level)[0];
+    const ranked = candidates(source.at, source.health, source.level);
+    const best = ranked[0];
+    const bestSameSpot = ranked.find((candidate) => candidate.at.x === source.at.x && candidate.at.y === source.at.y);
+    const moveMargin = cfg.jobs.moveMargin ?? 0.2;
+    const candidate =
+      best &&
+      bestSameSpot &&
+      (best.at.x !== source.at.x || best.at.y !== source.at.y) &&
+      best.score <= bestSameSpot.score * (1 + moveMargin)
+        ? bestSameSpot
+        : best;
     if (!candidate) {
       break;
     }

@@ -119,14 +119,14 @@ export class Calibration {
     return (found + prior * PRIOR_RUNS) / (dataValue.runs + PRIOR_RUNS);
   }
 
-  /** Multiplier for the danger → HP heuristic (1 until dangerous runs were seen). */
+  /** Multiplier for the danger → HP heuristic (1 until dangerous runs were seen), kept in a sane range. */
   get hpScale(): number {
     const item = this.data.hp;
     if (!item.runs || item.predicted <= 0) {
       return 1;
     }
     const prior = (item.predicted / item.runs) * PRIOR_RUNS; // PRIOR_RUNS runs exactly as predicted
-    return (item.observed + prior) / (item.predicted + prior);
+    return Math.min(3, Math.max(0.5, (item.observed + prior) / (item.predicted + prior)));
   }
 
   /** Hotel energy rate multiplier: measured sleeps blended with 1 (the hotel's number read as % per hour). */
