@@ -30,6 +30,18 @@ The game records a browser fingerprint at login, so tw-cli needs the fingerprint
 
 Everything is stored in `~/.config/tw-cli/` (session with mode 0600). Set `TW_CLI_HOME` to use another folder.
 
+### More than one account
+
+There is no in-app account switcher. Run one process per account, each with its own `TW_CLI_HOME`; the session,
+fingerprint, autopilot settings, calibration, caches and debug logs all stay under that folder:
+
+```sh
+TW_CLI_HOME=~/.config/tw-cli/alt npm run tw
+```
+
+The setup page (`tw web`, or `w` on the setup screen) uses port 7373, so give instances that are setting up at the
+same time different `TW_WEB_PORT`s. Throttling is per process: two running instances send at twice the rate.
+
 ## Use
 
 ```sh
