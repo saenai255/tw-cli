@@ -88,9 +88,19 @@ browser client's code; **unverified** = assumed, check live and update this file
 ## Seasonal events
 
 - `Game.init.sesData.<Event>` carries the **personal** event progress: `counter.value` and `counter.key`
-  (`ses:<id>_collected`), the reward thresholds in `rewards` (`{<points>:{id, desc}}`), and `meta.end`.
-  `ceData.<event id>` carries the display name, event stages and community progress. Verified from the saved
-  en32 bootstrap.
+  (`ses:<id>_collected`), the reward thresholds in `rewards` (`{<points>:{id, desc}}`), `meta.end`, and
+  `friendsbar` when friends can receive event currency. Live Day of the Dead 2026: `friendsbar` is
+  `{label: "Send 20 Cempasúchil Flowers", cooldown: 82800}` (23 h). The raw `sesData` key (`DayOfDead`) is the
+  `event` value the friendsbar requests expect; the lowercased `event_id` is the `communityevent` id.
+- `ceData.<event id>` carries the display name, `event_stages` (community rewards keyed by threshold; each entry
+  has `{reward, reward_id, text}`), `event_progress` (live 44,685,021 flowers) and `event_matchup` (stage →
+  threshold). Verified live 2026-11-07.
+- Friendsbar requests: `friendsbar/search` (mode) `{search_type:'friends', search_term:''}` →
+  `{players:[{player_id, name, level, …}], eventActivations:[{friend_id, event_name, activation_time}]}`.
+  `activation_time` is server epoch seconds; a friend can receive points when there is no activation or
+  `activation_time + cooldown <= now`. `friendsbar/event_all {event:<sesData key>}` sends to all eligible friends;
+  the browser shows the reply's `msg` (it only checks `error`). Single friend:
+  `friendsbar/event {player_id, event}` → `{msg, activationTime}`.
 - The browser updates the counter live through `SesStatChanged {<stat>: value}` (keys get a `ses:` prefix).
 - Event generator items are ordinary `usetype: 'use'` items whose description says
   "Generates <amount> <currency> for the <event> event … once every <hours>". Examples: Flower pot (1250 every

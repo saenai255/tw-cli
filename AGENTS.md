@@ -105,3 +105,5 @@ the summary. Small gains compound; nobody needs to schedule a cleanup.
   wait but within one refill uses the item even when each single wait is short.
 - Job rewards have separate goals: Money = cash pay, Products = listed item drops × sell price, Lucky finds =
   luck chance × max `minMaxItemVal`. Never fold luck into Money or Products.
+- Seasonal events get a `g e` tab only while one runs: all personal/community rewards including claimed, friends
+  who can still receive points, and one bulk action to send to all eligible friends (confirm with `y`).

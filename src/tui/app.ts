@@ -13,6 +13,7 @@ import { CharacterScreen } from './character.ts';
 import { ChatScreen } from './chat.ts';
 import { DebugScreen } from './debug.ts';
 import { DuelsScreen } from './duels.ts';
+import { EventScreen } from './event.ts';
 import { bar, formatDuration, money, scrollWindow, truncate } from './format.ts';
 import { HomeScreen } from './home.ts';
 import { ICON } from './icons.ts';
@@ -193,6 +194,9 @@ function helpFor(context: {
   }
   if (context.mode === 'town') {
     return '↑↓ building · Enter construction · u refresh · Esc back · ? help';
+  }
+  if (context.mode === 'event') {
+    return 'j k scroll · a send to all · u refresh · Esc back · ? help';
   }
   if (context.mode === 'home') {
     return 'Enter chat · ←/→ room · c cancel current · +/- minimap · g go to · ? help';
@@ -554,6 +558,9 @@ export function App({
   const poiIdx = Math.min(poiSel, Math.max(0, pois.length - 1));
 
   const go = (match: Mode) => {
+    if (match === 'event' && !state.event) {
+      return;
+    }
     capture.current = false;
     setMapPanel(false);
     if (match === mode) {
@@ -802,6 +809,9 @@ export function App({
       if (mode === 'town') {
         return void state.loadTownHall();
       }
+      if (mode === 'event') {
+        return void state.loadEventFriends();
+      }
       return void state.refreshQueue();
     }
     if (onScreen) {
@@ -972,7 +982,7 @@ export function App({
 
   let body: React.ReactElement | null;
   if (overlay === 'help') {
-    body = createElement(HelpOverlay, { mode, width, height: bodyH });
+    body = createElement(HelpOverlay, { mode, width, height: bodyH, hasEvent: !!state.event });
   } else if (overlay === 'layers') {
     body = createElement(
       Box,
@@ -1070,7 +1080,9 @@ export function App({
                       ? createElement(DebugScreen, props)
                       : mode === 'town'
                         ? createElement(TownScreen, props)
-                        : createElement(ChatScreen, props);
+                        : mode === 'event'
+                          ? createElement(EventScreen, props)
+                          : createElement(ChatScreen, props);
     screen = createElement(Box, { display: overlay ? 'none' : 'flex' }, el);
   }
 
@@ -1082,7 +1094,7 @@ export function App({
     Box,
     { flexDirection: 'column', width, height },
     createElement(Header, { state }),
-    createElement(NavBar, { mode, overlay, leader, width }),
+    createElement(NavBar, { mode, overlay, leader, width, hasEvent: !!state.event }),
     body,
     screen,
     createElement(LogPane, { state, lines: logLines }),
@@ -1096,16 +1108,20 @@ function NavBar({
   overlay,
   leader,
   width,
+  hasEvent,
 }: {
   mode: Mode;
   overlay: string | null;
   leader: boolean;
   width: number;
+  hasEvent: boolean;
 }) {
-  const items = GOTO.filter((group) => group.mode || group.overlay).map((group) => ({
-    ...group,
-    active: overlay ? group.overlay === overlay : group.mode === mode,
-  }));
+  const items = GOTO.filter((group) => (group.mode || group.overlay) && (group.mode !== 'event' || hasEvent)).map(
+    (group) => ({
+      ...group,
+      active: overlay ? group.overlay === overlay : group.mode === mode,
+    }),
+  );
   return createElement(
     Box,
     { width, paddingX: 1 },

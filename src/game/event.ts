@@ -1,6 +1,6 @@
 // Seasonal event data from Game.init (`sesData` counter/rewards + `ceData` event name/end) and the
 // cooldown-driven event generator items (Flower pot etc., usetype 'use').
-import { entries, isObj, type JsonObject, obj, vals } from '../util/json.ts';
+import { entries, isObj, type JsonObject, obj, objs, vals } from '../util/json.ts';
 import type { Inventory } from './inventory.ts';
 import type { ItemCatalog, ItemDef } from './items.ts';
 
@@ -12,6 +12,8 @@ export interface EventReward {
 
 export interface ActiveEvent {
   id: string;
+  /** Raw `sesData` key (e.g. "DayOfDead"), used by the friendsbar requests. */
+  apiKey: string;
   name: string;
   /** Personal counter value (`sesData.<event>.counter.value`). */
   points: number;
@@ -21,6 +23,20 @@ export interface ActiveEvent {
   next: EventReward | null;
   /** The game's formatted end date, kept as text (server timezone). */
   ends: string | null;
+  /** Friend points from `sesData.<event>.friendsbar`; null when the event has none. */
+  friendsbar: { cooldown: number; label: string } | null;
+  /** Community reward thresholds from `ceData.<id>.event_stages`. */
+  communityRewards: EventReward[];
+  /** Community progress (`ceData.<id>.event_progress`). */
+  communityPoints: number;
+}
+
+/** One friend in the friendsbar search, with the last event point sent (server seconds). */
+export interface EventFriend {
+  playerId: number;
+  name: string;
+  level: number;
+  activationAt: number | null;
 }
 
 export interface EventItem {
@@ -38,6 +54,33 @@ const nextReward = (rewards: EventReward[], points: number): EventReward | null 
 
 const rewardId = (value: unknown): string | number | null =>
   typeof value === 'string' || typeof value === 'number' ? value : null;
+
+/** `ceData.<id>.event_stages`: an object keyed by threshold (or an array of `{price}` groups). */
+function parseCommunityRewards(eventInfo: JsonObject): EventReward[] {
+  const out: EventReward[] = [];
+  const add = (atValue: unknown, value: unknown): void => {
+    const at = Number(atValue) || 0;
+    if (at <= 0) {
+      return;
+    }
+    const list = Array.isArray(value) ? objs(value) : isObj(value) ? [value] : [];
+    const texts = list.map((reward) => String(reward.text ?? reward.reward ?? '')).filter(Boolean);
+    const withId = list.find((reward) => reward.reward_id !== undefined || reward.id !== undefined);
+    out.push({ at, id: rewardId(withId?.reward_id ?? withId?.id), text: texts.join(' · ') });
+  };
+  const stages = eventInfo.event_stages;
+  if (Array.isArray(stages)) {
+    for (const value of stages) {
+      const stage = obj(value);
+      add(stage.price ?? stage.at ?? stage.threshold, stage.rewards ?? stage);
+    }
+  } else {
+    for (const [at, value] of entries(obj(stages))) {
+      add(at, value);
+    }
+  }
+  return out.filter((reward) => reward.text).sort((first, second) => first.at - second.at);
+}
 
 /** The active seasonal event, preferring the entry that has a personal counter. */
 export function parseActiveEvent(game: JsonObject | null | undefined): ActiveEvent | null {
@@ -66,20 +109,62 @@ export function parseActiveEvent(game: JsonObject | null | undefined): ActiveEve
     .filter((reward) => reward.at > 0)
     .sort((first, second) => first.at - second.at);
   const points = Number(counter.value) || 0;
+  const friendsbarInfo = obj(data.friendsbar);
+  const friendsbarCooldown = Number(friendsbarInfo.cooldown);
   return {
     id,
+    apiKey: key,
     name: String(eventInfo.event_name ?? eventInfo.name ?? prettifyEventKey(key)),
     points,
     counterKey: String(counter.key ?? ''),
     rewards,
     next: nextReward(rewards, points),
     ends: data.meta ? String(obj(data.meta).end ?? '') || null : null,
+    friendsbar: Object.keys(friendsbarInfo).length
+      ? {
+          cooldown: Number.isFinite(friendsbarCooldown) ? friendsbarCooldown : 0,
+          label: String(friendsbarInfo.label ?? 'Send event points'),
+        }
+      : null,
+    communityRewards: parseCommunityRewards(eventInfo),
+    communityPoints: Number(eventInfo.event_progress) || 0,
   };
 }
 
 /** Apply a live SesStatChanged value without rebuilding the whole event. */
 export function withEventPoints(event: ActiveEvent, points: number): ActiveEvent {
   return { ...event, points, next: nextReward(event.rewards, points) };
+}
+
+/** `friendsbar/search {search_type:'friends'}` → friends and their last event-point activation. */
+export function parseEventFriends(json: JsonObject, event: ActiveEvent): EventFriend[] {
+  const activations = new Map<number, number>();
+  for (const value of objs(json.eventActivations)) {
+    if (String(value.event_name ?? '').toLowerCase() !== event.id.toLowerCase()) {
+      continue;
+    }
+    const playerId = Number(value.friend_id);
+    const at = Number(value.activation_time);
+    if (Number.isFinite(playerId) && Number.isFinite(at) && at > 0) {
+      activations.set(playerId, at);
+    }
+  }
+  return objs(json.players)
+    .map((player) => {
+      const playerId = Number(player.player_id);
+      return {
+        playerId,
+        name: String(player.name ?? '?'),
+        level: Number(player.level) || 0,
+        activationAt: activations.get(playerId) ?? null,
+      };
+    })
+    .filter((friend) => friend.playerId > 0);
+}
+
+/** Whether a friend can receive event points now (never sent, or the cooldown has passed). */
+export function eventFriendAvailable(friend: EventFriend, cooldown: number, now: number): boolean {
+  return !friend.activationAt || friend.activationAt + cooldown <= now;
 }
 
 /** Event generator items: "Generates 1250 flowers for the … event … once every 11.5 hours". */

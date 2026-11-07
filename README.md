@@ -55,6 +55,7 @@ In the TUI, press `?` for help on any screen. Keys are vim-like: `Esc` always go
 | `g b`         | trade: bank, shops, mobile trader, market, buy orders                             |
 | `g d`         | duels: NPCs & players                                                             |
 | `g c`         | full chat with whispers (`g L` turns live updates on)                             |
+| `g e`         | event: all rewards and friend points (only during a seasonal event)               |
 | `g a`         | autopilot                                                                         |
 | `g x`         | debug log: everything the client and autopilot did, with the data                 |
 | `g s` · `g p` | sleep in a hotel · points of interest                                             |
@@ -63,7 +64,8 @@ In the TUI, press `?` for help on any screen. Keys are vim-like: `Esc` always go
 
 The daily login bonus is collected automatically when the TUI starts; if that fails, `daily bonus pending` stays
 in the header and the next start tries again. Active seasonal events show their personal progress and any ready
-event items in the header.
+event items in the header. `g e` opens the event tab while one runs: every personal and community reward (including
+claimed ones), friends who can still receive event currency, and `a` to send points to all of them.
 
 ## Autopilot
 

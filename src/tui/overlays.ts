@@ -20,6 +20,7 @@ export type Mode =
   | 'trade'
   | 'duels'
   | 'chat'
+  | 'event'
   | 'autopilot'
   | 'debug'
   | 'town';
@@ -32,6 +33,7 @@ export const SCREEN_MODES: Mode[] = [
   'trade',
   'duels',
   'chat',
+  'event',
   'autopilot',
   'debug',
   'town',
@@ -49,6 +51,12 @@ export const GOTO: { key: string; label: string; help: string; mode?: Mode; over
   { key: 'b', label: 'trade', mode: 'trade', help: 'trade: bank, shops, market, buy orders' },
   { key: 'd', label: 'duels', mode: 'duels', help: 'duels: NPCs & players' },
   { key: 'c', label: 'chat', mode: 'chat', help: 'full chat: rooms & whispers (needs live updates)' },
+  {
+    key: 'e',
+    label: 'event',
+    mode: 'event',
+    help: 'event: personal & community rewards, friend points (only during an event)',
+  },
   { key: 'a', label: 'autopilot', mode: 'autopilot', help: 'autopilot: priorities, modules, projected queue' },
   {
     key: 'x',
@@ -195,6 +203,12 @@ const SHORTCUTS: Record<Mode | 'global', [string, string][]> = {
     ['t', 'whisper to a player'],
     ['Esc', 'back'],
   ],
+  event: [
+    ['↑ ↓  j k', 'scroll · PgUp / PgDn page'],
+    ['a', 'send event points to all eligible friends (y confirms)'],
+    ['u', 'refresh friends'],
+    ['Esc', 'back'],
+  ],
 };
 
 const MODE_TITLE: Record<Mode, string> = {
@@ -207,6 +221,7 @@ const MODE_TITLE: Record<Mode, string> = {
   trade: 'Trade',
   duels: 'Duels',
   chat: 'Chat',
+  event: 'Event',
   autopilot: 'Autopilot',
   debug: 'Debug',
   town: 'Town',
@@ -230,7 +245,17 @@ const LEGEND: [string, string, string][] = [
   ['┊┄', 'gray', 'county border'],
 ];
 
-export function HelpOverlay({ mode, width, height }: { mode: Mode; width: number; height: number }) {
+export function HelpOverlay({
+  mode,
+  width,
+  height,
+  hasEvent = false,
+}: {
+  mode: Mode;
+  width: number;
+  height: number;
+  hasEvent?: boolean;
+}) {
   const row =
     (prefix: string) =>
     ([key, date]: [string, string], index: number) =>
@@ -262,7 +287,7 @@ export function HelpOverlay({ mode, width, height }: { mode: Mode; width: number
         Box,
         { flexDirection: 'column' },
         createElement(Text, { bold: true }, 'Everywhere'),
-        ...SHORTCUTS.global.map(row('g')),
+        ...SHORTCUTS.global.filter(([key]) => key !== 'g e' || hasEvent).map(row('g')),
       ),
       mode === 'map'
         ? createElement(

@@ -1101,6 +1101,129 @@ test('chat: rooms and history from Status / Text / tells, sending is a second re
   assert.equal(poller.history.get('room_town_1421')!.at(-1)!.own, true);
 });
 
+test('event friends: load eligible friends and send points to all', async () => {
+  fakeServer();
+  const state = makeState();
+  const event = parseActiveEvent({
+    sesData: {
+      DayOfDead: {
+        meta: { end: '16.11.2026 12:00:59' },
+        rewards: { 100: { id: 'wof-unlock', desc: 'Loteria' } },
+        counter: { key: 'ses:dayofdead_collected', value: 120827 },
+        friendsbar: { label: 'Send 20 Cempasúchil Flowers', cooldown: 82800 },
+      },
+    },
+    ceData: { dayofdead: { event_name: 'Day of the Dead 2026' } },
+  });
+  assert.ok(event);
+  state.event = event;
+  state.character.playerId = 42;
+  let searches = 0;
+  routes['/game.php?window=friendsbar&mode=search'] = () => {
+    searches++;
+    return {
+      players: [
+        { player_id: 42, name: 'Me', level: 50 },
+        { player_id: 1, name: 'Ann', level: 10 },
+        { player_id: 2, name: 'Bob', level: 20 },
+      ],
+      eventActivations:
+        searches === 1
+          ? [{ friend_id: 2, event_name: 'DayOfDead', activation_time: 4_000_000_000 }]
+          : [
+              { friend_id: 1, event_name: 'DayOfDead', activation_time: 4_000_000_000 },
+              { friend_id: 2, event_name: 'DayOfDead', activation_time: 4_000_000_000 },
+            ],
+    };
+  };
+  routes['/game.php?window=friendsbar&action=event_all'] = () => ({
+    msg: 'You sent 20 Cempasúchil Flowers to 1 friend.',
+  });
+  await state.loadEventFriends();
+  assert.deepEqual(
+    state.eventFriends?.map((friend) => [friend.playerId, friend.name]),
+    [
+      [1, 'Ann'],
+      [2, 'Bob'],
+    ],
+  );
+  assert.equal(
+    state.eventFriends?.some((friend) => friend.playerId === 42),
+    false,
+  );
+  const message = await state.sendEventPointsToAll();
+  assert.equal(message, 'You sent 20 Cempasúchil Flowers to 1 friend.');
+  assert.equal(state.eventFriendsSent, 1);
+  assert.equal(
+    new URLSearchParams(calls.find((call) => call.url.includes('action=event_all'))?.body).get('event'),
+    'DayOfDead',
+  );
+});
+
+test('event screen: g e shows personal and community rewards plus eligible friends', async () => {
+  fakeServer();
+  const state = makeState();
+  state.recentReports = [];
+  state.event = parseActiveEvent({
+    sesData: {
+      DayOfDead: {
+        meta: { end: '16.11.2026 12:00:59' },
+        rewards: {
+          100: { id: 'wof-unlock', desc: 'Loteria de Muertos' },
+          500: { id: 51775000, desc: 'A motivation box' },
+        },
+        counter: { key: 'ses:dayofdead_collected', value: 600 },
+        friendsbar: { label: 'Send 20 Cempasúchil Flowers', cooldown: 82800 },
+      },
+    },
+    ceData: {
+      dayofdead: {
+        event_name: 'Day of the Dead 2026',
+        event_stages: { 10000: [{ reward: 'map', reward_id: 'halloween', text: 'Red rivers' }] },
+        event_progress: 44685021,
+      },
+    },
+  });
+  state.eventFriends = [{ playerId: 1, name: 'Ann', level: 10, activationAt: null }];
+  routes['/game.php?window=friendsbar&mode=search'] = () => ({
+    players: [
+      { player_id: 1, name: 'Ann', level: 10 },
+      { player_id: 2, name: 'Bob', level: 20 },
+    ],
+    eventActivations: [{ friend_id: 2, event_name: 'DayOfDead', activation_time: 4_000_000_000 }],
+  });
+  const screen = tui(state);
+  try {
+    await screen.settle();
+    screen.reset();
+    await screen.keys('g', 'e');
+    await screen.settle(200);
+    const plain = screen.plain();
+    assert.match(plain, /Personal rewards · 2\/2 claimed/);
+    assert.match(plain, /Community rewards · 1\/1/);
+    assert.match(plain, /Red rivers/);
+    assert.match(plain, /Ann · L10/);
+    assert.match(plain, /Send 20 Cempasúchil Flowers/);
+  } finally {
+    screen.done();
+  }
+});
+
+test('event screen: g e is hidden without an active event', async () => {
+  fakeServer();
+  const state = makeState();
+  state.recentReports = [];
+  const screen = tui(state);
+  try {
+    await screen.settle();
+    screen.reset();
+    await screen.keys('g');
+    assert.doesNotMatch(screen.plain(), /e event/);
+  } finally {
+    screen.done();
+  }
+});
+
 test('chat: the town room comes first in both chat lists', () => {
   const state = makeState();
   const poller = new ChatPoller(state.client);

@@ -19,7 +19,16 @@ import { CharacterState, isUsablePosition, type Position } from './character.ts'
 import { ServerClock } from './clock.ts';
 import { DebugLog, diffSnapshots } from './debug-log.ts';
 import { DuelApi, type DuelData, type DuelOpponent, duelPost, type NpcDuelResult } from './duels.ts';
-import { type ActiveEvent, type EventItem, eventReadyItems, parseActiveEvent, withEventPoints } from './event.ts';
+import {
+  type ActiveEvent,
+  type EventFriend,
+  type EventItem,
+  eventFriendAvailable,
+  eventReadyItems,
+  parseActiveEvent,
+  parseEventFriends,
+  withEventPoints,
+} from './event.ts';
 import { fetchHotel, type Hotel, type HotelRoom, roomRate } from './hotel.ts';
 import { type EquipSets, Inventory, InventoryApi } from './inventory.ts';
 import { baseId, type ItemCatalog, type ItemSetCatalog, loadItemCatalog, loadItemSets, statsOf } from './items.ts';
@@ -56,6 +65,7 @@ import {
 import { BuyCatalog, type BuyNeed, type BuyPick, chooseBuys, where } from './quest-buy.ts';
 import {
   parseGameNumber,
+  plainText,
   type Quest,
   QuestApi,
   type QuestEmployer,
@@ -241,6 +251,12 @@ export class GameState extends EventEmitter {
   hasLoginBonus = false;
   /** Active seasonal event and its personal progress (Game.init sesData/ceData). */
   event: ActiveEvent | null = null;
+  /** Friendsbar search for the active event, null until loaded. */
+  eventFriends: EventFriend[] | null = null;
+  /** Last friendsbar event_all reply (plain text). */
+  eventFriendsMessage: string | null = null;
+  /** Friends reached by the last event_all, when the reload showed the difference. */
+  eventFriendsSent: number | null = null;
   skills = new Skills();
   quests: Quest[] = [];
   questCapacity = 0;
@@ -342,7 +358,7 @@ export class GameState extends EventEmitter {
     this.inventory = Inventory.fromInit(this.bagInit, this.items ?? undefined);
     this.equipSets = null;
     this.hasLoginBonus = !!bootstrap.player?.hasLoginBonus;
-    this.event = parseActiveEvent(bootstrap.game);
+    this.setEvent(parseActiveEvent(bootstrap.game));
     this.mobileTrader = null;
     this.townHall = null;
     this.construction = null;
@@ -889,7 +905,7 @@ export class GameState extends EventEmitter {
       const { bootstrap } = await this.reopen();
       this.hasLoginBonus = !!bootstrap.player?.hasLoginBonus;
       this.inventory.setItemMeta(bootstrap.bag?.itemCooldown, bootstrap.bag?.itemLifetime);
-      this.event = parseActiveEvent(bootstrap.game);
+      this.setEvent(parseActiveEvent(bootstrap.game));
       const data = bootstrap.character;
       if (!data) {
         return;
@@ -1136,9 +1152,79 @@ export class GameState extends EventEmitter {
     await this.collectLoginReward();
   }
 
+  /** Active event friend data belongs to one event; a different event starts with an empty list. */
+  private setEvent(event: ActiveEvent | null): void {
+    if (event?.id !== this.event?.id) {
+      this.eventFriends = null;
+      this.eventFriendsMessage = null;
+      this.eventFriendsSent = null;
+    }
+    this.event = event;
+  }
+
   /** Event generator items whose cooldown is over (header reminders). */
   eventReadyItems(): EventItem[] {
     return eventReadyItems(this.inventory, this.items, this.event, this.clock.now());
+  }
+
+  /** Friends who can still receive this event's points (friendsbar/search). */
+  async loadEventFriends(): Promise<void> {
+    const event = this.event;
+    if (!event?.friendsbar) {
+      this.eventFriends = [];
+      return;
+    }
+    await this.guard('Event friends', async () => {
+      this.eventFriends = await this.fetchEventFriends(event);
+    });
+  }
+
+  private async fetchEventFriends(event: ActiveEvent): Promise<EventFriend[]> {
+    const response = await this.client.remoteCallMode('friendsbar', 'search', {
+      search_type: 'friends',
+      search_term: '',
+    });
+    if (response.error) {
+      throw new Error(plainText(response.msg) || 'friendsbar/search failed');
+    }
+    return parseEventFriends(response, event).filter((friend) => friend.playerId !== this.character.playerId);
+  }
+
+  /** Sends the event currency to every friend whose cooldown is over. */
+  async sendEventPointsToAll(): Promise<string | null> {
+    const event = this.event;
+    const friendsbar = event?.friendsbar;
+    if (!event || !friendsbar) {
+      return null;
+    }
+    const before = this.eventFriends?.filter((friend) =>
+      eventFriendAvailable(friend, friendsbar.cooldown, this.clock.now()),
+    ).length;
+    this.eventFriendsSent = null;
+    this.eventFriendsMessage = null;
+    return (
+      (await this.guard('Send event points', async () => {
+        const response = await this.client.remoteCall('friendsbar', 'event_all', { event: event.apiKey });
+        if (response.error) {
+          throw new Error(plainText(response.msg) || 'friendsbar/event_all failed');
+        }
+        const message = plainText(response.msg) || 'Event points sent.';
+        this.eventFriendsMessage = message;
+        this.info(`Event points: ${message}`);
+        try {
+          this.eventFriends = await this.fetchEventFriends(event);
+          if (before !== undefined) {
+            const after = (this.eventFriends ?? []).filter((friend) =>
+              eventFriendAvailable(friend, friendsbar.cooldown, this.clock.now()),
+            ).length;
+            this.eventFriendsSent = Math.max(0, before - after);
+          }
+        } catch (err) {
+          this.debug.add('request', 'Event friends after send failed', { error: errorMessage(err) });
+        }
+        return message;
+      })) ?? null
+    );
   }
 
   /** Live SesStatChanged: update the personal event counter without a full reload. */

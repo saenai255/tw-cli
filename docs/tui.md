@@ -16,9 +16,10 @@ Ink (React without JSX: `const h = React.createElement`). Shell in `src/tui/app.
 - `App`'s `useInput` handles **global keys first**, then screens get the rest. Only five are single keys: `?` help,
   `q` quit, `m` map, `u` refresh, `g` go-to. Everything else is `g` + a key from `GOTO` (`overlays.ts`, shared by
   the nav bar, the help and the handler): `h` home · `j` jobs · `m` map · `i` character · `t` town · `q` quests ·
-  `r` mail · `b` trade · `d` duels · `c` chat · `a` autopilot · `x` debug, plus `s` sleep · `p` places · `L` live ·
-  `R` reload · `A` account. While `g` is pending the nav bar shows "go to ›" and the key line lists the actions.
-  Keep it that way: new screens and rare actions go under `g`, so screens keep the letters.
+  `r` mail · `b` trade · `d` duels · `c` chat · `e` event (only while one runs) · `a` autopilot · `x` debug, plus
+  `s` sleep · `p` places · `L` live · `R` reload · `A` account. While `g` is pending the nav bar shows "go to ›"
+  and the key line lists the actions. Keep it that way: new screens and rare actions go under `g`, so screens keep
+  the letters.
 - **Esc is back**, one step: overlay → panel / detail focus → previous screen. `App` keeps a history (`go(m)` /
   `back()`; a screen appears in it once, so going back never loops; empty history = home). Screens call
   `onExit` (= `back`). A screen's own key never toggles it off; pressing it again does nothing.
@@ -64,6 +65,10 @@ Ink (React without JSX: `const h = React.createElement`). Shell in `src/tui/app.
 - **Trade** (`trade.ts`, mode `trade`, `g b`): Bank · Mobile trader · General store · Tailor · Gunsmith · Market ·
   My market. Mobile trader loads `shop_trader`'s `trader` offers anywhere, shows the dollar price and rotation
   time, and buys with `Enter`; the bag and offers are re-read after a buy.
+- **Event** (`event.ts`, mode `event`, `g e`, only while `state.event` exists): all personal rewards
+  (claimed / next / locked) and community rewards from `ceData`, plus friends who can still receive the event
+  currency. `a` + `y` sends to all eligible friends (`friendsbar/event_all`), `u` reloads the friends list,
+  `j k` / PgUp PgDn scroll. The header keeps the event progress line.
 - **Chat** (`chat.ts`, mode `chat`, `g c`): for the town room, a third column lists the clients in the room with
   presence (● online / ◐ idle, 5 min), name, role (Mayor / Councillor / Citizen / Guest) and level, online-first.
   It is hidden below 90 columns with a note; whisper/saloon rooms keep the two-column layout. The town room is
