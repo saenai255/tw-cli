@@ -77,7 +77,9 @@ part is a toggle with safe defaults, and the plan pane says what it will do next
 - **Silver/gold jobs** discovered on the map can be planned at their exact location with the real
   `job/job` values; the toggle is off by default and the autopilot does not scan the map itself.
 - **Sleep** when out of energy or low on HP, and wakes early once energy is enough to level up or for the next
-  stretch; uses energy / health / motivation items from the bag when that beats waiting.
+  stretch; uses energy / health / motivation items from the bag when that beats waiting. Energy items are sized
+  by effect, not shop price: the smallest item that covers the next run and the energy still needed to level up;
+  a level-up within an hour (setting) is waited for instead.
 - **Banks** cash over a limit when a town is on the way.
 - **Quests**: works on what open quests need, finishes them (picks the reward by your priority), wears quest
   gear and puts yours back, accepts saloon quests in towns it passes, and finishes time-window quests inside

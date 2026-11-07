@@ -497,6 +497,101 @@ test('E11 an item with none left (all reserved) is not used', () => {
   assert.equal(pick.tasks[0]!.key, 'job:1:long');
 });
 
+const nibble = { itemId: 2, name: 'Nibble', count: 2, value: 50, effect: { energy: 0.1, health: 0, motivation: 0 } };
+const coffee = { itemId: 3, name: 'Coffee', count: 2, value: 7, effect: { energy: 0.25, health: 0, motivation: 0 } };
+const guarana = { itemId: 4, name: 'Guarana', count: 2, value: 7, effect: { energy: 0.5, health: 0, motivation: 0 } };
+const tea = { itemId: 5, name: 'Mate tea', count: 2, value: 7, effect: { energy: 1, health: 0, motivation: 0 } };
+
+test('E12 near a level-up: the smallest item that covers the level need, not the 100 % tea', () => {
+  // 200 XP to 33 with 100 XP runs: 2 runs, 24 energy; 3 %/h gives 6 back during the 2 h, so 18 is needed.
+  // Coffee (25 %) is the smallest that covers 18; the tea would waste 82 of its 100.
+  const pick = plan({
+    start: { energy: 0, energyRegen: 0.03, experience: XP0 + GAP - 200 },
+    jobs: oneJob,
+    consumables: [nibble, coffee, guarana, tea],
+    config: withItems,
+  });
+  assert.equal(pick.tasks[0]!.key, 'use:3');
+  assert.match(pick.tasks[0]!.why!, /for level 33/);
+  assert.deepEqual(keys(pick, 2), ['use:3', 'job:1:long']);
+});
+
+test('E13 near a level-up within an hour of regen: wait instead of using an item', () => {
+  // Energy 7 and 2 runs of 12: 20 regen during the runs leaves 4 needed, but the first run waits 5 energy
+  // (30 min) and the second 2 (12 min): 42 min to the level-up, so no item and the job waits.
+  const pick = plan({
+    start: { energy: 7, experience: XP0 + GAP - 200 },
+    jobs: oneJob,
+    consumables: [coffee, tea],
+    config: withItems,
+  });
+  assert.ok(pick.tasks.every((task) => task.module !== 'consumables'));
+  assert.equal(pick.tasks[0]!.key, 'job:1:long');
+  near(pick.timeline.steps[0]!.waited, 1800);
+  assert.match(pick.tasks[0]!.why!, /level-up in ~42 min: waiting/);
+});
+
+test('E14 level out of reach: the smallest item that covers the run, not the tea', () => {
+  // 33 runs to 33: no refill caps the need, so only the next run (12) matters. Coffee (25 %) covers it.
+  const pick = plan({ start: { energy: 0 }, jobs: oneJob, consumables: [coffee, tea], config: withItems });
+  assert.equal(pick.tasks[0]!.key, 'use:3');
+});
+
+test('E15 no item covers the level need: the largest goes first, then the plan sizes again', () => {
+  // 200 XP to 33 with 100 XP runs of 30 energy, no regen: 60 needed. Coffee (25) cannot start a run;
+  // Guarana (50) can and makes the most progress; the shortfall left is 10, so Coffee goes after it.
+  const heavy = [job(1, { long: [100, 0, 30] })];
+  const pick = plan({
+    start: { energy: 0, energyRegen: 0, experience: XP0 + GAP - 200 },
+    jobs: heavy,
+    consumables: [coffee, guarana],
+    config: withItems,
+  });
+  assert.equal(pick.tasks[0]!.key, 'use:4');
+  assert.deepEqual(keys(pick, 4), ['use:4', 'job:1:long', 'use:3', 'job:1:long']);
+});
+
+test('E16 near the max, items cap to the same energy: the smallest is used', () => {
+  // 95/100, a 100-energy run: every item adds only 5. Nibble (10 %) wastes the least of its bar.
+  const pick = plan({
+    start: { energy: 95 },
+    jobs: [job(1, { long: [100, 0, 100] })],
+    consumables: [nibble, coffee, tea],
+    config: withItems,
+  });
+  assert.equal(pick.tasks[0]!.key, 'use:2');
+});
+
+test('E17 a 10 % item cannot cover a 12-energy run: the tea is still used', () => {
+  const pick = plan({ start: { energy: 0 }, jobs: oneJob, consumables: [nibble, tea], config: withItems });
+  assert.equal(pick.tasks[0]!.key, 'use:5');
+});
+
+test('E18 waiting for a level-up off: the item is used even when the level is close', () => {
+  const pick = plan({
+    start: { energy: 7, experience: XP0 + GAP - 200 },
+    jobs: oneJob,
+    consumables: [coffee],
+    config: (configValue) => {
+      configValue.modules.consumables = true;
+      configValue.consumables.levelUpWait = 0;
+    },
+  });
+  assert.equal(pick.tasks[0]!.key, 'use:3');
+});
+
+test('E19 the item must cover the level need, not only the next run', () => {
+  // 7 energy, 2 runs of 12 to 33: 5 short for the first run, but 11 short for the level-up (18 external).
+  // Nibble (10) covers only the run; Coffee (25) is the smallest that covers the level need.
+  const pick = plan({
+    start: { energy: 7, energyRegen: 0.03, experience: XP0 + GAP - 200 },
+    jobs: oneJob,
+    consumables: [nibble, coffee],
+    config: withItems,
+  });
+  assert.equal(pick.tasks[0]!.key, 'use:3');
+});
+
 // ---- How long to sleep ----------------------------------------------------------------------------------------
 
 const room = [hotel(9, point(0), 0.5)];

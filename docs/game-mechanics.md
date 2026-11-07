@@ -21,8 +21,8 @@ browser client's code; **unverified** = assumed, check live and update this file
 - Max HP: `100 + (level − 1)·lpPerPoint + healthSkill·(lpPerPoint + lpPerPointBonus)` (`calcMaxHealth`). Verified.
 - **Jobs pay their energy when queued** (task/add reply may carry the new `energy`; if it does not, subtract
   locally). Cancelling a queued job refunds it. Verified for queued; running-job refund unverified.
-- **Level-up refills energy and health.** Assumed by the autopilot timeline; unverified (check on the first
-  live level-up: sync right after and compare).
+- **Level-up refills energy and health.** Seen live once (calibration `levelUps` 1/1, 2026-11-06); the autopilot
+  timeline and its energy-item sizing rely on it.
 - Level XP: `levelStartXp(l) = floor((Σk² + 10(l+1) − 21)·3) + 1000·(l−120)^2.9 above 120` (`calcLowerExp`). Verified.
 
 ## Tasks and queue

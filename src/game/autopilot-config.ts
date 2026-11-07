@@ -34,7 +34,8 @@ export interface AutopilotConfig {
    */
   jobs: { special: boolean; moveMargin: number };
   bank: { above: number; maxDetour: number };
-  consumables: { energy: boolean; health: boolean; motivation: boolean; reserve: number };
+  /** `levelUpWait`: wait this long (s) for a level-up instead of using an energy item; 0 disables the wait. */
+  consumables: { energy: boolean; health: boolean; motivation: boolean; reserve: number; levelUpWait: number };
   /**
    * unfinishable: also work on quests with a requirement the autopilot cannot get (off: skip those quests).
    * buy: buy quest items no job drops (town shops, mobile trader; `market`: instant-buy offers too). Limits per
@@ -84,7 +85,7 @@ export const DEFAULT_CONFIG: AutopilotConfig = {
   ownTownWithin: 3600,
   jobs: { special: false, moveMargin: 0.2 },
   bank: { above: 4500, maxDetour: 1800 },
-  consumables: { energy: true, health: true, motivation: false, reserve: 2 },
+  consumables: { energy: true, health: true, motivation: false, reserve: 2, levelUpWait: 3600 },
   quests: {
     repeatable: false,
     unfinishable: false,

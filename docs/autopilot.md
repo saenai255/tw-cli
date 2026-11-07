@@ -10,7 +10,7 @@ screen (`g a`). Spec agreed with the user in a grill session ("Decisions").
 | -------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `src/game/timeline.ts`                                   | Pure projection of a task list: travel, waits, regen, energy/HP/XP/level/cash per step, level-up refill, partial sleeps, instant actions.                                                  |
 | `src/game/autopilot-config.ts`                           | Settings, rules, saved plan, spend tracker, duel record (`autopilot.json` in the config dir); `goalWeights`, `fingerprint`, `duelOutlook`.                                                 |
-| `src/game/autopilot.ts`                                  | Pure planner `planAutopilot(input)`: HP → bank → inserts → jobs by priority, energy sleeps / consumables when short. `parseConsumable`, `expectedHpLoss`.                                  |
+| `src/game/autopilot.ts`                                  | Pure planner `planAutopilot(input)`: HP → bank → inserts → jobs by priority, energy sleeps / level-up-sized consumables when short. `parseConsumable`, `expectedHpLoss`.                   |
 | `src/game/autopilot-runner.ts`                           | `AutopilotRunner` (`state.runner`): replans on input change, sends tasks, wakes from sleep, deposits, uses items, cancels for a better plan, NPC duels for XP, retries/backoff, spend cap. |
 | `src/game/special-jobs.ts`                               | 24 h disk cache of map-discovered silver/gold positions and their raw `job/job` replies.                                                                                                   |
 | `src/game/autopilot-quests.ts`                           | `QuestModule`: finish (reward by priority), wear + restore gear, buy quest items, pick up market goods, accept saloon quests, re-read quests waiting for a time window. `chooseReward`.    |
@@ -28,6 +28,9 @@ screen (`g a`). Spec agreed with the user in a grill session ("Decisions").
   real `job/job` values. It does not scan the map itself; see "Silver/gold jobs".
 - `switch spot only when better by` (20 %): stay at the queue-end location unless a job elsewhere scores clearly
   better; stops marginal walks like Peace Officer → Banker for +9.7 % XP/energy.
+- `Use consumables` sizes energy items to the next level-up: the smallest item that covers the next run and the
+  energy still needed to level up; `wait for a level-up up to` (1 h) is how close the level-up can be before it
+  waits instead of using one. Price is not used for energy items (they are not regularly purchasable).
 - `Q` queue view: queued + planned rows (ETA, travel, energy, HP, XP, $, module). `c` cancel a queued task,
   `d` exclude a planned job / remove an inserted row, `u` clear exclusions, `s`/`b` insert a sleep / bank stop at
   a row's time, `J K` move an inserted row. It captures all keys while open (Esc closes).
@@ -139,8 +142,18 @@ screen (`g a`). Spec agreed with the user in a grill session ("Decisions").
   loss (heuristic × calibrated scale) would take HP under `sleepBelow` are skipped, HP sleeps on or off; runs
   that cost no HP are always allowed (under the line with no hotel, safe jobs go on while HP regenerates). A
   level-up raises max HP by `lpPerPoint` in the timeline.
-- **Energy short**: motivation item at or below 75 %; energy item if getting the energy otherwise takes
-  ≥ 30 min; else sleep when it reaches the wake target sooner than waiting; else the timeline waits.
+- **Energy short**: motivation item at or below 75 %; an energy item when getting the energy otherwise takes
+  ≥ 30 min and the next level-up is further than `levelUpWait` (1 h of natural regen by default); else sleep
+  when it reaches the wake target sooner than waiting; else the timeline waits.
+- **Energy items** are sized by effect, not shop price: these items are not regularly purchasable, so the bag
+  is the limit, not the item's nominal price. The planner takes the smallest item whose gain covers the next
+  run and, while the level-up is within one energy bar, the energy still needed to reach it (best XP/energy job,
+  regen during those runs subtracted). If no item covers the level-up need, the largest goes first (most
+  progress) and the plan sizes again after it. The max-energy cap counts (`gain = min(effect, maxEnergy −
+  current)`), so at 95/100 a 10 % item beats a 100 % tea that both cap at 5. When the level-up is within
+  `levelUpWait` of natural regen (waits between the runs included), it waits or sleeps instead of using one; the
+  job reason then ends with `level-up in ~N min: waiting`. The level-up refill itself has been seen live once
+  (calibration `levelUps` 1/1).
 - **Wake target** (toggles): when the run after the sleep levels up by itself, just its energy ("enough for X,
   which levels up"); else enough energy to reach the next level with the best XP/energy job (the level-up
   refill does the rest; when current energy already covers that, this used to give no reason and slept to
@@ -244,17 +257,18 @@ weights · own-town hotel/bank within 1 h, else by cost · bank detour ≤ 30 mi
 full waits for the earliest task end (max 60 s) · quests: all but excluded chains, time-limited yes, repeatables off · daily cap
 $1,000 · quest items no job drops are bought: shops (any town in reach) and the mobile trader ≤ $3,000 per quest,
 the market only under $5,000 (its trip to collect counted), trips ≤ 1 h, a minute of walking worth $15 when
-comparing sources · consumables valued at shop price · retries 1/5/15 min, 3 strikes · HP < 50 % sleep or item, up at ≥ 70 %
+comparing sources · health/motivation consumables valued at shop price; energy items sized by effect (their
+nominal price is not a real cost) · retries 1/5/15 min, 3 strikes · HP < 50 % sleep or item, up at ≥ 70 %
 at a hotel, 50–70 % keep working safely · NPC duels only (never players): HP ≥ 70 %, level ≤ duel level + margin,
 one loss stops them for the day, for XP when it beats the best job · plan to the 6 h horizon (was 10 jobs) · skip quests it cannot finish · level-up energy refund always on ·
-queue slots cost 10 min (the TUI is not open 24/7) · calibrate drops, HP, rooms from your own game · silver/gold
+energy items: smallest that covers the next run and the level-up need, wait up to 1 h for a level-up (setting),
+largest first when none covers the whole level-up need · queue slots cost 10 min (the TUI is not open 24/7) · calibrate drops, HP, rooms from your own game · silver/gold
 jobs only when discovered by the normal map tile loads, real `job/job` values, toggle off by default, no scan.
 
 ## Unverified (check live, then move to docs/game-mechanics.md)
 
 - Hotel room `energy` / `health` units (read as % of max per hour; energy now calibrated from sleeps, health not).
 - Cancelling a running sleep keeps the regenerated energy (a sync runs after the first wake-up).
-- Level-up refills energy and HP (counted by calibration: `levelUps`).
 - Silver/gold `job/job` reply shape (`durations[]`, `is_gold` / `is_silver`): from the client bundle, a live
   special has not been captured yet. Drop % > 100 means that many items on average.
 - Finishing map-giver quests needs you at the giver (the module walks there after a failed finish).

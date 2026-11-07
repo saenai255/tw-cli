@@ -1,6 +1,7 @@
 // Autopilot planner: from a snapshot (character, server queue, jobs, quests, hotels, settings) it plans the
 // next tasks greedily along the timeline, safety first: HP sleep → bank → jobs by priority, with energy
-// sleeps when sleeping gets the energy sooner than waiting. Pure: no requests; the runner in state.ts sends.
+// sleeps / items when they get the energy sooner than waiting (items sized to the next level-up).
+// Pure: no requests; the runner in state.ts sends.
 // Job value: each goal's gain per cost, normalised by the best candidate for that goal, weighted by the
 // ranking (autopilot-config.ts). Cost: energy (+ walking at the energy it would regenerate meanwhile) or time.
 
@@ -63,7 +64,7 @@ export interface BuyTrip {
   what: string[];
 }
 
-/** An item in the bag the autopilot may use: `count` is what is left above the reserve; `value` its shop price. */
+/** An item in the bag the autopilot may use: `count` is what is left above the reserve; `value` its shop price (health / motivation picks only; energy items are sized by effect). */
 export interface Consumable {
   itemId: number;
   name: string;
@@ -306,8 +307,8 @@ export function planAutopilot(input: PlanInput): Plan {
   const stock = new Map((input.consumables ?? []).map((consumable) => [consumable.itemId, consumable.count]));
   const useMod = mods.consumables;
 
-  /** The cheapest usable item per point of `kind`, with at least `min` of it (fraction of max). */
-  const pickItem = (kind: keyof ConsumableEffect, min: number) => {
+  /** The cheapest usable health / motivation item per point of `kind`, with at least `min` of it (fraction of max). */
+  const pickItem = (kind: 'health' | 'motivation', min: number) => {
     let best: Consumable | null = null;
     for (const consumable of input.consumables ?? []) {
       if (
@@ -337,6 +338,49 @@ export function planAutopilot(input: PlanInput): Plan {
       },
       action: { type: 'use', itemId: consumable.itemId },
     };
+  };
+
+  /**
+   * The smallest energy item that covers the next run and, when the level-up is within one refill, the energy
+   * still needed to reach it. Price is not used: these items are not regularly purchasable, so the bag is the
+   * limit. When no item covers the full need, the largest one goes first (most progress); the plan re-evaluates.
+   */
+  const pickEnergyItem = (
+    neededNow: number,
+    usefulToLevel: number | null,
+    energyNow: number,
+  ): { item: Consumable; gain: number; raw: number } | null => {
+    const capacity = start.maxEnergy - energyNow;
+    const target = Math.min(capacity, Math.max(neededNow, usefulToLevel ?? neededNow));
+    let smallest: { item: Consumable; gain: number; raw: number } | null = null;
+    let largest: { item: Consumable; gain: number; raw: number } | null = null;
+    for (const consumable of input.consumables ?? []) {
+      const raw = consumable.effect.energy * start.maxEnergy;
+      const gain = Math.min(raw, capacity);
+      if (
+        consumable.effect.energy <= 0 ||
+        (stock.get(consumable.itemId) ?? 0) <= 0 ||
+        gain < neededNow ||
+        skip.has(`use:${consumable.itemId}`)
+      ) {
+        continue;
+      }
+      if (
+        !largest ||
+        gain > largest.gain ||
+        (gain === largest.gain &&
+          (raw < largest.raw || (raw === largest.raw && consumable.itemId < largest.item.itemId)))
+      ) {
+        largest = { item: consumable, gain, raw };
+      }
+      if (
+        gain >= target &&
+        (!smallest || raw < smallest.raw || (raw === smallest.raw && consumable.itemId < smallest.item.itemId))
+      ) {
+        smallest = { item: consumable, gain, raw };
+      }
+    }
+    return smallest ?? largest;
   };
 
   const tasks: PlannedTask[] = [];
@@ -514,26 +558,59 @@ export function planAutopilot(input: PlanInput): Plan {
         return `${routeNeed.label}${quest} (${amount} left)`;
       });
 
-  /** Energy to reach the next level with the best XP-per-energy job; null when out of reach of one refill. */
-  const levelUpEnergy = (from: Position, health: number, experience: number, level: number): number | null => {
+  /**
+   * How the next level-up looks with the best XP-per-energy job: the runs' total energy, the part that must be
+   * available now (regen during the runs counted), and the wait without items or sleeps (regen during the waits
+   * included). Null when the level is out of reach of one refill or already at the max level.
+   */
+  const levelUpOutlook = (
+    from: Position,
+    health: number,
+    experience: number,
+    level: number,
+    energyNow: number,
+  ): { energy: number; needed: number; wait: number } | null => {
+    if (level >= (start.maxLevel ?? 250)) {
+      return null;
+    }
     const gap = levelStartXp(level + 1, start.maxLevel) - experience;
     if (gap <= 0) {
-      return 0;
+      return { energy: 0, needed: 0, wait: 0 };
     }
-    let best: { xp: number; energy: number } | null = null;
+    let best: { xp: number; energy: number; duration: number } | null = null;
     for (const candidate of candidates(from, health, level)) {
       if (candidate.energy <= 0 || candidate.xp <= 0) {
         continue;
       }
       if (!best || candidate.xp / candidate.energy > best.xp / best.energy) {
-        best = { xp: candidate.xp, energy: candidate.energy };
+        best = { xp: candidate.xp, energy: candidate.energy, duration: candidate.values.duration };
       }
     }
     if (!best) {
       return null;
     }
-    const need = Math.ceil(gap / best.xp) * best.energy;
-    return need <= start.maxEnergy ? need : null;
+    const runs = Math.ceil(gap / best.xp);
+    const energy = runs * best.energy;
+    if (energy > start.maxEnergy) {
+      return null;
+    }
+    const regenPerRun = (start.maxEnergy * start.energyRegen * best.duration) / 3600;
+    const needed = Math.max(0, energy - runs * regenPerRun);
+    let have = energyNow;
+    let wait = 0;
+    for (let run = 0; run < runs; run++) {
+      if (have < best.energy) {
+        const seconds = regenSeconds(have, best.energy, start.maxEnergy, start.energyRegen);
+        if (!Number.isFinite(seconds)) {
+          wait = Number.POSITIVE_INFINITY;
+          break;
+        }
+        wait += seconds;
+        have = Math.min(start.maxEnergy, have + (start.maxEnergy * start.energyRegen * seconds) / 3600);
+      }
+      have = Math.min(start.maxEnergy, have - best.energy + regenPerRun);
+    }
+    return { energy, needed, wait };
   };
 
   /** A sleep that reaches the wake targets soonest (own town first when close), with when it is done and the walk there. */
@@ -553,7 +630,9 @@ export function planAutopilot(input: PlanInput): Plan {
       source.level < (start.maxLevel ?? Infinity) &&
       source.experience + next.xp >= levelStartXp(source.level + 1, start.maxLevel);
     const lvl =
-      wake.levelUp && !nextLevels ? levelUpEnergy(source.at, source.health, source.experience, source.level) : null;
+      wake.levelUp && !nextLevels
+        ? (levelUpOutlook(source.at, source.health, source.experience, source.level, source.energy)?.energy ?? null)
+        : null;
     if (nextLevels) {
       energy = Math.max(energy, minEnergy);
       reasons.push(`enough for ${next?.title ?? 'the next job'}, which levels up`);
@@ -874,7 +953,19 @@ export function planAutopilot(input: PlanInput): Plan {
         };
       }
     }
+    let waitForLevelUpNote = '';
     if (source.energy < candidate.energy) {
+      const neededNow = candidate.energy - source.energy;
+      const levelsNow =
+        source.level < (start.maxLevel ?? 250) &&
+        source.experience + candidate.xp >= levelStartXp(source.level + 1, start.maxLevel);
+      const outlook = levelsNow
+        ? null
+        : levelUpOutlook(source.at, source.health, source.experience, source.level, source.energy);
+      const usefulToLevel = levelsNow ? neededNow : outlook ? Math.max(0, outlook.needed - source.energy) : null;
+      const waitToLevel = levelsNow
+        ? regenSeconds(source.energy, candidate.energy, start.maxEnergy, start.energyRegen)
+        : (outlook?.wait ?? Infinity);
       const sl = mods.energySleep
         ? sleepPlan('energy', candidate.energy, { title: candidate.job.name, xp: candidate.xp })
         : null;
@@ -882,18 +973,23 @@ export function planAutopilot(input: PlanInput): Plan {
       // A hotel within the own-town distance beats an item; else an item when it saves at least 30 minutes.
       const hotelNear = !!sl && sl.travel <= cfg.ownTownWithin;
       const other = Math.min(wait, sl ? sl.ready : Infinity);
-      const item =
-        useMod && cfg.consumables.energy && !hotelNear
-          ? pickItem('energy', (candidate.energy - source.energy) / start.maxEnergy)
-          : null;
-      if (item && other >= 1800) {
+      const choice =
+        useMod && cfg.consumables.energy && !hotelNear ? pickEnergyItem(neededNow, usefulToLevel, source.energy) : null;
+      const levelSoon = waitToLevel <= cfg.consumables.levelUpWait;
+      if (choice && other >= 1800 && !levelSoon) {
+        const item = choice.item;
+        const reachesLevel = usefulToLevel !== null && usefulToLevel > 0 && choice.gain >= usefulToLevel;
+        const saved = Math.min(reachesLevel ? waitToLevel : other, 86400);
         push(
           useTask(
             item,
-            `energy ${Math.floor(source.energy)}: use ${item.name} (saves ${Math.round(Math.min(other, 86400) / 60)} min)`,
+            `energy ${Math.floor(source.energy)}: use ${item.name}${reachesLevel ? ` for level ${source.level + 1}` : ''} (saves ${Math.round(saved / 60)} min)`,
           ),
         );
         continue;
+      }
+      if (choice && other >= 1800 && levelSoon) {
+        waitForLevelUpNote = ` · level-up in ~${Math.max(1, Math.round(waitToLevel / 60))} min: waiting`;
       }
     }
     if (source.energy < candidate.energy && mods.energySleep) {
@@ -911,6 +1007,10 @@ export function planAutopilot(input: PlanInput): Plan {
     );
     const forQuests = questParts(candidate.gains);
     const special = candidate.special ? ` · ${candidate.special} job` : '';
+    const baseWhy =
+      goal === 'quests' && forQuests.length
+        ? `quest: ${forQuests.join('; ')}${special}`
+        : `best ${GOAL_WORD[goal]} per ${cfg.per === 'energy' ? 'energy' : 'hour'}${forQuests.length ? ` · also ${forQuests.join('; ')}` : ''}${special}`;
     push({
       module: 'jobs',
       key: candidate.key,
@@ -927,10 +1027,7 @@ export function planAutopilot(input: PlanInput): Plan {
       },
       post: jobPost(candidate.job.id, candidate.at, values.duration),
       value: candidate.score * candidate.cost,
-      why:
-        goal === 'quests' && forQuests.length
-          ? `quest: ${forQuests.join('; ')}${special}`
-          : `best ${GOAL_WORD[goal]} per ${cfg.per === 'energy' ? 'energy' : 'hour'}${forQuests.length ? ` · also ${forQuests.join('; ')}` : ''}${special}`,
+      why: `${baseWhy}${waitForLevelUpNote}`,
     });
     const last = tl.steps[tl.steps.length - 1];
     if (!last) {
