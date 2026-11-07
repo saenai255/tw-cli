@@ -10,10 +10,10 @@ import { arr, isObj, mergeDefaults, obj, objs } from '../util/json.ts';
 import type { Quest } from './quests.ts';
 import type { TimelineStep } from './timeline.ts';
 
-export type Goal = 'quests' | 'xp' | 'money' | 'products';
-export const GOALS: Goal[] = ['quests', 'xp', 'money', 'products'];
+export type Goal = 'quests' | 'xp' | 'money' | 'products' | 'luck';
+export const GOALS: Goal[] = ['quests', 'xp', 'money', 'products', 'luck'];
 /** Weights by rank: the top goal decides, the rest break ties. */
-export const RANK_WEIGHTS = [1, 0.25, 0.06, 0.015];
+export const RANK_WEIGHTS = [1, 0.25, 0.06, 0.015, 0.004];
 
 export type ModuleKey = 'jobs' | 'energySleep' | 'hpSleep' | 'consumables' | 'bank' | 'quests' | 'npcDuels' | 'dryRun';
 
@@ -67,7 +67,7 @@ export interface AutopilotConfig {
 
 export const DEFAULT_CONFIG: AutopilotConfig = {
   running: false,
-  priority: ['quests', 'xp', 'money', 'products'],
+  priority: ['quests', 'xp', 'money', 'products', 'luck'],
   per: 'energy',
   customWeights: null,
   modules: {
@@ -275,10 +275,8 @@ export function goalWeights(config: AutopilotConfig): Record<Goal, number> {
       number
     >;
   }
-  return Object.fromEntries(config.priority.map((group, index) => [group, RANK_WEIGHTS[index] ?? 0])) as Record<
-    Goal,
-    number
-  >;
+  const byRank = new Map(config.priority.map((group, index) => [group, RANK_WEIGHTS[index] ?? 0]));
+  return Object.fromEntries(GOALS.map((group) => [group, byRank.get(group) ?? 0])) as Record<Goal, number>;
 }
 
 function stable(value: unknown): unknown {

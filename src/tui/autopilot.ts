@@ -28,8 +28,9 @@ export const BUILT_MODULES = new Set<ModuleKey>([
 const GOAL_LABEL: Record<Goal, string> = {
   quests: 'Quests completed',
   xp: 'Experience',
-  money: 'Money',
-  products: 'Products (items to sell)',
+  money: 'Money (cash pay)',
+  products: 'Products (item drops to sell)',
+  luck: 'Lucky finds (chance × max)',
 };
 
 type Row =
@@ -102,13 +103,14 @@ export const ROWS: [Row, ...Row[]] = [
   { kind: 'goal', rank: 1 },
   { kind: 'goal', rank: 2 },
   { kind: 'goal', rank: 3 },
+  { kind: 'goal', rank: 4 },
+  { kind: 'head', text: 'Modules (Space toggles · ← → change values)' },
   {
     kind: 'toggle',
-    label: 'Best per hour (off: per energy)',
+    label: 'Score jobs per hour (off: per energy)',
     get: (configValue) => configValue.per === 'time',
     set: (configValue, flag) => (configValue.per = flag ? 'time' : 'energy'),
   },
-  { kind: 'head', text: 'Modules (Space toggles · ← → change values)' },
   moduleToggle('jobs', 'Queue jobs'),
   subToggle((configValue) => configValue.jobs, 'special', 'use discovered silver & gold jobs'),
   numberSetting(
@@ -437,7 +439,13 @@ const ICON_COLOR: Record<string, string> = {
   [ICON.item]: 'magenta',
   [ICON.duel]: 'red',
 };
-const GOAL_SHORT: Record<Goal, string> = { quests: 'Quests', xp: 'XP', money: 'Money', products: 'Products' };
+const GOAL_SHORT: Record<Goal, string> = {
+  quests: 'Quests',
+  xp: 'XP',
+  money: 'Money',
+  products: 'Products',
+  luck: 'Luck',
+};
 
 /** Title and right-hand column of a plan row. */
 function rowText(result: PlanRow, now: number): { title: string; info: string } {

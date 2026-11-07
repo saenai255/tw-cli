@@ -8,6 +8,7 @@
 import {
   type AutopilotConfig,
   type AutopilotRules,
+  GOALS,
   type Goal,
   goalWeights,
   type PlannedTask,
@@ -208,13 +209,15 @@ interface Candidate {
   by: Record<Goal, number>;
 }
 
-const GOAL_KEYS: Goal[] = ['quests', 'xp', 'money', 'products'];
+/** A zero score for every goal. */
+const noGoals = (): Record<Goal, number> =>
+  Object.fromEntries(GOALS.map((group) => [group, 0])) as Record<Goal, number>;
 
 /** Best gain per cost of each goal in a candidate list. */
 function bestRates(list: { raw: Record<Goal, number>; cost: number }[]): Record<Goal, number> {
-  const best: Record<Goal, number> = { quests: 0, xp: 0, money: 0, products: 0 };
+  const best = noGoals();
   for (const candidate of list) {
-    for (const group of GOAL_KEYS) {
+    for (const group of GOALS) {
       best[group] = Math.max(best[group], candidate.raw[group] / candidate.cost);
     }
   }
@@ -238,7 +241,8 @@ const GOAL_WORD: Record<Goal, string> = {
   quests: 'quest progress',
   xp: 'XP',
   money: 'money',
-  products: 'products to sell',
+  products: 'product drops',
+  luck: 'lucky finds',
 };
 
 export function planAutopilot(input: PlanInput): Plan {
@@ -435,7 +439,7 @@ export function planAutopilot(input: PlanInput): Plan {
         rewardXp += got * (entry?.xpPerUnit ?? 0);
         rewardMoney += got * (entry?.moneyPerUnit ?? 0);
       }
-      // Motivation only changes at 25 % breakpoints; products do not depend on it.
+      // Motivation only changes at 25 % breakpoints; product drops do not depend on it, luck chance does.
       const baseFactor = motivationFactor(job.motivation);
       const entryFactor = motivationFactor(Math.max(0, job.motivation - (done.drop.get(job.id) ?? 0)));
       const fade = baseFactor > 0 ? entryFactor / baseFactor : 0;
@@ -444,6 +448,8 @@ export function planAutopilot(input: PlanInput): Plan {
         (accumulator, current) => accumulator + current.expected * input.itemValue(current.itemId),
         0,
       );
+      // The lucky find is a separate goal: its chance per run × the top of the job's find range.
+      const luck = Math.max(0, values.luck * fade) * Math.max(0, job.luckValue?.[1] ?? 0);
       const hpSeconds = hpLoss > 0 ? regenSeconds(0, hpLoss, start.maxHealth, start.healthRegen) : 0;
       // Energy net of the level-up refund; at least a quarter (the refill only tops up to the max).
       const energy = Math.max(0.25 * values.energy, values.energy - (xp + rewardXp) * refundPerXp);
@@ -466,8 +472,8 @@ export function planAutopilot(input: PlanInput): Plan {
         gains,
         cost: Math.max(cost, 1e-6),
         score: 0,
-        by: { quests: 0, xp: 0, money: 0, products: 0 },
-        raw: { quests, xp: xp + rewardXp, money: values.money * fade + rewardMoney, products },
+        by: noGoals(),
+        raw: { ...noGoals(), quests, xp: xp + rewardXp, money: values.money * fade + rewardMoney, products, luck },
       });
     };
 
@@ -525,14 +531,14 @@ export function planAutopilot(input: PlanInput): Plan {
     // Each goal in units of its exchange rate (the best rate at the plan's start), so a crumb of quest
     // progress stays a crumb and values of different plans compare. A goal with no rate yet: this list's best.
     const best = bestRates(list);
-    for (const group of GOAL_KEYS) {
+    for (const group of GOALS) {
       if (rates && rates[group] > 0) {
         best[group] = rates[group];
       }
     }
     for (const candidate of list) {
       candidate.score = 0;
-      for (const groupInfo of Object.keys(best) as Goal[]) {
+      for (const groupInfo of GOALS) {
         candidate.by[groupInfo] =
           best[groupInfo] > 0
             ? (weights[groupInfo] * (candidate.raw[groupInfo] / candidate.cost)) / best[groupInfo]
@@ -976,14 +982,21 @@ export function planAutopilot(input: PlanInput): Plan {
       const choice =
         useMod && cfg.consumables.energy && !hotelNear ? pickEnergyItem(neededNow, usefulToLevel, source.energy) : null;
       const levelSoon = waitToLevel <= cfg.consumables.levelUpWait;
-      if (choice && other >= 1800 && !levelSoon) {
+      // A level-up beyond the wait setting is worth an item even when each single wait is short.
+      const itemForLevel = outlook !== null && !levelSoon;
+      if (choice && (itemForLevel || (other >= 1800 && !levelSoon))) {
         const item = choice.item;
         const reachesLevel = usefulToLevel !== null && usefulToLevel > 0 && choice.gain >= usefulToLevel;
         const saved = Math.min(reachesLevel ? waitToLevel : other, 86400);
+        const level = reachesLevel
+          ? ` for level ${source.level + 1}`
+          : itemForLevel
+            ? ` toward level ${source.level + 1}`
+            : '';
         push(
           useTask(
             item,
-            `energy ${Math.floor(source.energy)}: use ${item.name}${reachesLevel ? ` for level ${source.level + 1}` : ''} (saves ${Math.round(saved / 60)} min)`,
+            `energy ${Math.floor(source.energy)}: use ${item.name}${level} (saves ${Math.round(saved / 60)} min)`,
           ),
         );
         continue;
@@ -1002,8 +1015,9 @@ export function planAutopilot(input: PlanInput): Plan {
       }
     }
     const values = candidate.values;
-    const goal = (Object.keys(candidate.by) as Goal[]).reduce((accumulator, current) =>
-      candidate.by[current] > candidate.by[accumulator] ? current : accumulator,
+    const goal = GOALS.reduce<Goal>(
+      (accumulator, current) => (candidate.by[current] > candidate.by[accumulator] ? current : accumulator),
+      'quests',
     );
     const forQuests = questParts(candidate.gains);
     const special = candidate.special ? ` · ${candidate.special} job` : '';

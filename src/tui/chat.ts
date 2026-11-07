@@ -256,12 +256,19 @@ function segLine(segs: Segment[], key: number, wrap?: 'truncate') {
   );
 }
 
-/** Rooms (town, saloon, …) then whispers, in the order both chat views show them. */
+/**
+ * Rooms then whispers, in the order both chat views show them: the town room first (both start at index 0),
+ * other rooms in server order, whispers last.
+ */
 export function chatRoomIds(state: ScreenProps['state']): string[] {
   const live = state.live;
-  return live
-    ? [...live.rooms.keys(), ...[...live.history.keys()].filter((entryKey) => entryKey.startsWith('tell:'))]
-    : [];
+  if (!live) {
+    return [];
+  }
+  const rooms = [...live.rooms.values()];
+  const ordered = [...rooms.filter((room) => room.kind === 'town'), ...rooms.filter((room) => room.kind !== 'town')];
+  const whispers = [...live.history.keys()].filter((entryKey) => entryKey.startsWith('tell:'));
+  return [...ordered.map((room) => room.id), ...whispers];
 }
 
 /**

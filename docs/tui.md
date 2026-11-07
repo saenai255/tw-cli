@@ -66,7 +66,8 @@ Ink (React without JSX: `const h = React.createElement`). Shell in `src/tui/app.
   time, and buys with `Enter`; the bag and offers are re-read after a buy.
 - **Chat** (`chat.ts`, mode `chat`, `g c`): for the town room, a third column lists the clients in the room with
   presence (● online / ◐ idle, 5 min), name, role (Mayor / Councillor / Citizen / Guest) and level, online-first.
-  It is hidden below 90 columns with a note; whisper/saloon rooms keep the two-column layout.
+  It is hidden below 90 columns with a note; whisper/saloon rooms keep the two-column layout. The town room is
+  listed first (home strip and full screen), then the other rooms in server order, then whispers.
 - **Daily login bonus**: no screen. `GameState.start()` checks `Player.hasLoginBonus` and collects once after the
   startup steps; the log line shows the reward. `daily bonus pending` stays in the header only if collection
   failed. The separate 7-day pony-express delivery is not shown.

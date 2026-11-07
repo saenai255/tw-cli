@@ -70,16 +70,19 @@ event items in the header.
 Plays the character while the TUI is open (`g a`; `R` runs / pauses, paused only shows what it would do). Every
 part is a toggle with safe defaults, and the plan pane says what it will do next and why.
 
-- **Jobs** by your ranked goals (quests, XP, money, products), planned 6 h ahead, per energy or per hour.
-  Reward values follow the game's 25 % motivation breakpoints, and each run's motivation loss is tracked. It
-  stays at the current spot unless another is 20 % better, and a server-full queue is waited out, not retried
-  job by job. When the game page has no position yet it waits for one instead of planning from the map origin.
+- **Jobs** by your ranked goals (quests, XP, cash, product drops, lucky finds), planned 6 h ahead, per energy or
+  per hour. Money is job and quest cash, Products is listed item drops at their sell price, Lucky finds is the
+  luck chance × max find value; each is scored separately. Reward values follow the game's 25 % motivation
+  breakpoints, and each run's motivation loss is tracked. It stays at the current spot unless another is 20 %
+  better, and a server-full queue is waited out, not retried job by job. When the game page has no position yet
+  it waits for one instead of planning from the map origin.
 - **Silver/gold jobs** discovered on the map can be planned at their exact location with the real
   `job/job` values; the toggle is off by default and the autopilot does not scan the map itself.
 - **Sleep** when out of energy or low on HP, and wakes early once energy is enough to level up or for the next
   stretch; uses energy / health / motivation items from the bag when that beats waiting. Energy items are sized
   by effect, not shop price: the smallest item that covers the next run and the energy still needed to level up;
-  a level-up within an hour (setting) is waited for instead.
+  a level-up within an hour (setting) is waited for instead, while a farther one uses its item even when each
+  next wait is short.
 - **Banks** cash over a limit when a town is on the way.
 - **Quests**: works on what open quests need, finishes them (picks the reward by your priority), wears quest
   gear and puts yours back, accepts saloon quests in towns it passes, and finishes time-window quests inside

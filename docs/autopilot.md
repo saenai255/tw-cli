@@ -124,11 +124,17 @@ screen (`g a`). Spec agreed with the user in a grill session ("Decisions").
   plan, and adds the on-the-spot `buy` action (cash − cost in the timeline). A trip further away is tried again
   after each later step. Trips earn no plan value, so cancel-for-better never cancels jobs to go shopping; the
   trip goes in when the queue runs out.
-- **Job score**: per goal (quest progress × weight, XP incl. quest rewards, money incl. quest rewards, products
-  = expected drops × sell price) gain per cost, divided by the goal's **exchange rate** and weighted by rank (1,
-  0.25, 0.06, 0.015) or custom weights. Exchange rates = best gain per cost per goal from where the server queue
-  ends, fixed for the whole plan (`plan.rates`) and passed to the cancel check's alternatives, so values compare
-  and the last crumbs of a need lose to the next goal.
+- **Job score**: five separate goals, each gain per cost, divided by the goal's **exchange rate** and weighted by
+  rank (1, 0.25, 0.06, 0.015, 0.004) or custom weights:
+  - **Quests**: weighted progress toward open quests.
+  - **XP**: job XP plus the quests' XP rewards this progress earns.
+  - **Money**: job cash plus the quests' money rewards.
+  - **Products**: expected listed job drops × item sell price.
+  - **Lucky finds**: luck chance × max find value (`minMaxItemVal[1]`), faded by planned motivation.
+
+  Exchange rates = best gain per cost per goal from where the server queue ends, fixed for the whole plan
+  (`plan.rates`) and passed to the cancel check's alternatives, so values compare and the last crumbs of a need
+  lose to the next goal.
 - **Staying put**: the best candidate at the queue-end spot is preferred unless the best one elsewhere is more
   than `jobs.moveMargin` (20 %) better. Travel already costs energy/time, so this stops marginal moves.
 - **Cost**: per energy: net energy + (travel + HP regen time + slot cost) × energy regenerated per second. Per
@@ -136,15 +142,16 @@ screen (`g a`). Spec agreed with the user in a grill session ("Decisions").
   time + slot cost. Net energy = energy − XP × maxEnergy ÷ XP-per-level (a level-up refills energy), at least a
   quarter of the energy (the refill tops up to the max). Slot cost (`slotCost`, 10 min): each run takes a queue
   slot and the TUI is not always open, so runs that fill slots fast leave you idle.
-- **Motivation**: XP and money scale with the game's 25 % breakpoints (`ceil(motivation × 4) / 4`); product
-  drops do not. Each run lowers the job's motivation by 1 / 5 / 12 % for short / middle / long (official
-  mechanics), and the plan tracks the accumulated drop per job, queued runs included. Runs whose expected HP
-  loss (heuristic × calibrated scale) would take HP under `sleepBelow` are skipped, HP sleeps on or off; runs
-  that cost no HP are always allowed (under the line with no hotel, safe jobs go on while HP regenerates). A
-  level-up raises max HP by `lpPerPoint` in the timeline.
-- **Energy short**: motivation item at or below 75 %; an energy item when getting the energy otherwise takes
-  ≥ 30 min and the next level-up is further than `levelUpWait` (1 h of natural regen by default); else sleep
-  when it reaches the wake target sooner than waiting; else the timeline waits.
+- **Motivation**: XP, money and luck chance scale with the game's 25 % breakpoints (`ceil(motivation × 4) / 4`);
+  product drops and the luck value range do not. Each run lowers the job's motivation by 1 / 5 / 12 % for short,
+  middle / long (official mechanics), and the plan tracks the accumulated drop per job, queued runs included.
+  Runs whose expected HP loss (heuristic × calibrated scale) would take HP under `sleepBelow` are skipped, HP
+  sleeps on or off; runs that cost no HP are always allowed (under the line with no hotel, safe jobs go on while
+  HP regenerates). A level-up raises max HP by `lpPerPoint` in the timeline.
+- **Energy short**: motivation item at or below 75 %; an energy item when the next level-up is further than
+  `levelUpWait` (1 h of natural regen by default) and within one refill (sized to that level-up), or when getting
+  the energy otherwise takes ≥ 30 min and the level-up is not near; else sleep when it reaches the wake target
+  sooner than waiting; else the timeline waits.
 - **Energy items** are sized by effect, not shop price: these items are not regularly purchasable, so the bag
   is the limit, not the item's nominal price. The planner takes the smallest item whose gain covers the next
   run and, while the level-up is within one energy bar, the energy still needed to reach it (best XP/energy job,
@@ -152,8 +159,10 @@ screen (`g a`). Spec agreed with the user in a grill session ("Decisions").
   progress) and the plan sizes again after it. The max-energy cap counts (`gain = min(effect, maxEnergy −
   current)`), so at 95/100 a 10 % item beats a 100 % tea that both cap at 5. When the level-up is within
   `levelUpWait` of natural regen (waits between the runs included), it waits or sleeps instead of using one; the
-  job reason then ends with `level-up in ~N min: waiting`. The level-up refill itself has been seen live once
-  (calibration `levelUps` 1/1).
+  job reason then ends with `level-up in ~N min: waiting`. When it is farther but within one refill, the item is
+  used even if each single wait is short; the reason says `for level N`, or `toward level N` when no item covers
+  the whole need (the largest goes first). A level out of reach of one refill keeps the 30 min rule. The
+  level-up refill itself has been seen live once (calibration `levelUps` 1/1).
 - **Wake target** (toggles): when the run after the sleep levels up by itself, just its energy ("enough for X,
   which levels up"); else enough energy to reach the next level with the best XP/energy job (the level-up
   refill does the rest; when current energy already covers that, this used to give no reason and slept to
@@ -262,8 +271,12 @@ nominal price is not a real cost) · retries 1/5/15 min, 3 strikes · HP < 50 % 
 at a hotel, 50–70 % keep working safely · NPC duels only (never players): HP ≥ 70 %, level ≤ duel level + margin,
 one loss stops them for the day, for XP when it beats the best job · plan to the 6 h horizon (was 10 jobs) · skip quests it cannot finish · level-up energy refund always on ·
 energy items: smallest that covers the next run and the level-up need, wait up to 1 h for a level-up (setting),
-largest first when none covers the whole level-up need · queue slots cost 10 min (the TUI is not open 24/7) · calibrate drops, HP, rooms from your own game · silver/gold
-jobs only when discovered by the normal map tile loads, real `job/job` values, toggle off by default, no scan.
+largest first when none covers the whole level-up need, and a farther level-up uses the item even when each
+single wait is short · queue slots cost 10 min (the TUI is not open 24/7) · calibrate drops, HP, rooms from your
+own game · silver/gold jobs only when discovered by the normal map tile loads, real `job/job` values, toggle off
+by default, no scan ·
+goals stay separate: Money = cash pay, Products = listed item drops at sell price, Lucky finds = luck chance × max
+find value, none folded into another.
 
 ## Unverified (check live, then move to docs/game-mechanics.md)
 

@@ -101,4 +101,7 @@ the summary. Small gains compound; nobody needs to schedule a cleanup.
   `yCoord` (the only short names kept are words like `id`, `url`, `html`).
 - Energy items are not valued by their nominal shop price (they are not regularly purchasable): use the
   smallest item that covers the next run and the energy still needed for the next level-up, waiting up to an
-  hour for a level-up; if none covers the level-up need, the largest goes first.
+  hour for a level-up; if none covers the level-up need, the largest goes first. A level-up farther than that
+  wait but within one refill uses the item even when each single wait is short.
+- Job rewards have separate goals: Money = cash pay, Products = listed item drops × sell price, Lucky finds =
+  luck chance × max `minMaxItemVal`. Never fold luck into Money or Products.

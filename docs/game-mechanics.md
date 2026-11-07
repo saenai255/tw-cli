@@ -53,6 +53,8 @@ browser client's code; **unverified** = assumed, check live and update this file
   `job/job` for that location, not in the tile data; its `durations[]` has the same shape as `work/index`.
   Silver jobs reset daily between 03:00 and 04:00, gold ones last until used up.
 - Item drops: expected items per run = `(prop + probBonus) / 100`.
+- Lucky find: each run has a `luck` chance (0–1, from `work/index` / `job/job`) of an item worth `minMaxItemVal`
+  `[$min, $max]`; the job window shows the range and the chance. The autopilot values it at chance × max.
 - Travel time: `distance · Game.travelSpeed · Character.speed` seconds.
 - Expected HP loss from danger: no formula known. The autopilot uses a heuristic (danger % of 10 % max HP per
   hour of work). Unverified.

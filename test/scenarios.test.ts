@@ -7,7 +7,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { chooseCancel, type Plan, planAutopilot } from '../src/game/autopilot.ts';
-import { DEFAULT_CONFIG, EMPTY_RULES } from '../src/game/autopilot-config.ts';
+import { DEFAULT_CONFIG, EMPTY_RULES, type Goal } from '../src/game/autopilot-config.ts';
 import { levelStartXp } from '../src/game/character.ts';
 import { projectTimeline, type TimelineStart, type TimelineStep } from '../src/game/timeline.ts';
 
@@ -296,7 +296,7 @@ test('J1 same place and energy: the job with more XP', () => {
 test('J2 money on top: the job that pays more', () => {
   const pick = plan({
     jobs: [job(1, { long: [100, 10] }), job(2, { long: [10, 200] })],
-    config: (configValue) => (configValue.priority = ['money', 'xp', 'quests', 'products']),
+    config: (configValue) => (configValue.priority = ['money', 'xp', 'quests', 'products', 'luck']),
   });
   assert.equal(pick.tasks[0]!.key, 'job:2:long');
 });
@@ -389,7 +389,7 @@ test('J16 products on top: the job dropping a $50 item beats a pure XP job', () 
   const pick = plan({
     jobs: [job(1, { long: [10, 0, 12, { 800000: 1 }] }), job(2, { long: [100, 0] })],
     itemValue: (id) => (id === 800000 ? 50 : 0),
-    config: (configValue) => (configValue.priority = ['products', 'xp', 'money', 'quests']),
+    config: (configValue) => (configValue.priority = ['products', 'xp', 'money', 'quests', 'luck']),
   });
   assert.equal(pick.tasks[0]!.key, 'job:1:long');
 });
@@ -402,13 +402,45 @@ test("J17 the nearest of a job's places is used", () => {
 test('J18 custom weights (money only) pick the money job', () => {
   const pick = plan({
     jobs: [job(1, { long: [200, 10] }), job(2, { long: [10, 200] })],
-    config: (configValue) => (configValue.customWeights = { quests: 0, xp: 0, money: 1, products: 0 }),
+    config: (configValue) => (configValue.customWeights = { quests: 0, xp: 0, money: 1, products: 0, luck: 0 }),
   });
   assert.equal(pick.tasks[0]!.key, 'job:2:long');
 });
 
 test('J19 quests on top with no open quest: the next goal (XP) decides', () => {
   const pick = plan({ jobs: [job(1, { long: [100, 10] }), job(2, { long: [20, 300] })] });
+  assert.equal(pick.tasks[0]!.key, 'job:1:long');
+});
+
+test('L1 money, product drops and lucky finds are separate goals', () => {
+  const cash = job(1, { long: [0, 1000] });
+  const drops = job(2, { long: [0, 0, 12, { 800000: 1.5 }] });
+  const lucky = job(3, { long: [0, 0] });
+  lucky.values.long.luck = 0.5;
+  lucky.luckValue = [100, 400];
+  const pick = (priority: Goal[]) =>
+    plan({
+      jobs: [cash, drops, lucky],
+      itemValue: (id) => (id === 800000 ? 100 : 0),
+      config: (configValue) => (configValue.priority = priority),
+    }).tasks[0]!.key;
+  assert.equal(pick(['money', 'xp', 'quests', 'products', 'luck']), 'job:1:long');
+  assert.equal(pick(['products', 'xp', 'money', 'quests', 'luck']), 'job:2:long');
+  assert.equal(pick(['luck', 'xp', 'money', 'quests', 'products']), 'job:3:long');
+});
+
+test('L2 lucky finds use the max value, not the average', () => {
+  // 50 % of [0, 400] is worth 200 at the max (100 at the average); [300, 300] is 150 either way.
+  const wide = job(1, { long: [0, 0] });
+  wide.values.long.luck = 0.5;
+  wide.luckValue = [0, 400];
+  const flat = job(2, { long: [0, 0] });
+  flat.values.long.luck = 0.5;
+  flat.luckValue = [300, 300];
+  const pick = plan({
+    jobs: [wide, flat],
+    config: (configValue) => (configValue.priority = ['luck', 'xp', 'money', 'quests', 'products']),
+  });
   assert.equal(pick.tasks[0]!.key, 'job:1:long');
 });
 
@@ -592,6 +624,39 @@ test('E19 the item must cover the level need, not only the next run', () => {
   assert.equal(pick.tasks[0]!.key, 'use:3');
 });
 
+const shortJob = [job(1, { short: [10, 0, 1] })];
+
+test('E20 a far level-up uses its item even when the next wait is under 30 min', () => {
+  // 500 XP to 33 with 10 XP / 1 energy runs: 50 runs, ~4.8 h of regen. The first wait is 6 min, so the old
+  // 30 min gate would wait; the level-up is beyond the 1 h setting, so Guarana (50) is used for it.
+  const pick = plan({
+    start: { energy: 0, experience: XP0 + GAP - 500 },
+    jobs: shortJob,
+    consumables: [guarana],
+    config: withItems,
+  });
+  assert.equal(pick.tasks[0]!.key, 'use:4');
+  assert.match(pick.tasks[0]!.why!, /for level 33/);
+});
+
+test('E21 no item covers the level-up need: the largest goes first even under 30 min', () => {
+  const pick = plan({
+    start: { energy: 0, experience: XP0 + GAP - 500 },
+    jobs: shortJob,
+    consumables: [coffee],
+    config: withItems,
+  });
+  assert.equal(pick.tasks[0]!.key, 'use:3');
+  assert.match(pick.tasks[0]!.why!, /toward level 33/);
+});
+
+test('E22 a level out of reach of one refill still waits out a short wait', () => {
+  // 3297 XP to 33 with 10 XP / 1 energy runs: 330 runs (330 energy), so no level-up item plan.
+  const pick = plan({ start: { energy: 0 }, jobs: shortJob, consumables: [guarana], config: withItems });
+  assert.equal(pick.tasks[0]!.key, 'job:1:short');
+  assert.ok(pick.tasks.every((task) => task.module !== 'consumables'));
+});
+
 // ---- How long to sleep ----------------------------------------------------------------------------------------
 
 const room = [hotel(9, point(0), 0.5)];
@@ -674,7 +739,7 @@ test('W10 the run after the sleep levels up although a cheaper XP job could too:
   const pick = plan({
     start: { energy: 2, experience: XP0 + GAP - 50 },
     hotels: room,
-    config: (configValue) => (configValue.priority = ['money', 'xp', 'quests', 'products']),
+    config: (configValue) => (configValue.priority = ['money', 'xp', 'quests', 'products', 'luck']),
     jobs: [job(1, { long: [100, 500, 10] }), job(2, { long: [60, 0, 1] })],
   });
   assert.equal(pick.tasks[0]!.wake!.energy, 10);
@@ -876,7 +941,7 @@ test('Q8 XP on top, quests second: the much better XP job first', () => {
   const pick = plan({
     jobs: [questJob(1, 10), job(2, { long: [200, 0] })],
     needs: [itemNeed(700000, 1)],
-    config: (configValue) => (configValue.priority = ['xp', 'quests', 'money', 'products']),
+    config: (configValue) => (configValue.priority = ['xp', 'quests', 'money', 'products', 'luck']),
   });
   assert.equal(pick.tasks[0]!.key, 'job:2:long');
 });
@@ -886,7 +951,7 @@ test("Q9 XP on top: the quest's XP reward makes the quest job the best XP", () =
   const pick = plan({
     jobs: [questJob(1, 100), job(3, { long: [150, 0] })],
     needs: [itemNeed(700000, 1, { xpPerUnit: 200 })],
-    config: (configValue) => (configValue.priority = ['xp', 'quests', 'money', 'products']),
+    config: (configValue) => (configValue.priority = ['xp', 'quests', 'money', 'products', 'luck']),
   });
   assert.equal(pick.tasks[0]!.key, 'job:1:long');
 });
@@ -1016,7 +1081,7 @@ test('S4 at 50 % motivation silver pays 100 XP, under the 118 XP normal job', ()
 
 test('S5 same-spot jobs win unless another spot is more than 20 % better', () => {
   const moneyFirst = (configValue: typeof DEFAULT_CONFIG) => {
-    configValue.priority = ['money', 'xp', 'quests', 'products'];
+    configValue.priority = ['money', 'xp', 'quests', 'products', 'luck'];
   };
   const same = job(1, { long: [0, 100] });
   const slightlyBetter = job(2, { long: [0, 120], at: [point(10)] });

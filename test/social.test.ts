@@ -30,6 +30,7 @@ const { MarketApi, parseOffer, depositFee, marketFee, buyOrderProblem, suggested
 const { bbText, formatReport } = await import('../src/game/mail.ts');
 const { planRoute } = await import('../src/game/route.ts');
 const { App } = await import('../src/tui/app.ts');
+const { chatRoomIds } = await import('../src/tui/chat.ts');
 
 const WORLD = 'https://en32.the-west.net';
 const FAST = {
@@ -1100,6 +1101,29 @@ test('chat: rooms and history from Status / Text / tells, sending is a second re
   assert.equal(poller.history.get('room_town_1421')!.at(-1)!.own, true);
 });
 
+test('chat: the town room comes first in both chat lists', () => {
+  const state = makeState();
+  const poller = new ChatPoller(state.client);
+  state.live = poller;
+  poller.handle({
+    id: 'Status',
+    t: 1,
+    payload: {
+      self: { id: 'client_42', name: 'shallax', level: 30, townId: 1421, town_rights: 3, actioned: Date.now() },
+      clients: [],
+      rooms: [
+        { roomdescription: { id: 'room_general_1', room: 'general', general_id: 1 }, members: [] },
+        {
+          roomdescription: { id: 'room_town_1421', room: 'town', title: 'Slobozia', townid: 1421 },
+          members: ['client_42'],
+        },
+      ],
+    },
+  });
+  poller.history.set('tell:Ann', []);
+  assert.deepEqual(chatRoomIds(state), ['room_town_1421', 'room_general_1', 'tell:Ann']);
+});
+
 test('route: energy budget (runs that fit, shortfall) and walking weighted by regeneration', () => {
   const need = { key: 'item:700', label: 'Ham', amount: 6, unit: 'items' as const, itemId: 700000, quests: ['A'] };
   const job = (id: number, groupid: number): any => ({
@@ -2000,7 +2024,7 @@ test('autopilot runner: queues what the energy covers, sleeps when out, wakes at
   ];
   gameState.updateAutopilot((autopilotFile) => {
     autopilotFile.config.running = true;
-    autopilotFile.config.priority = ['xp', 'money', 'quests', 'products'];
+    autopilotFile.config.priority = ['xp', 'money', 'quests', 'products', 'luck'];
   });
 
   // 40 energy: three 12-energy runs fit.
