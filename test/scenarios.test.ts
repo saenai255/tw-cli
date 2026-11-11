@@ -9,6 +9,7 @@ import { test } from 'node:test';
 import { chooseCancel, type Plan, planAutopilot } from '../src/game/autopilot.ts';
 import { DEFAULT_CONFIG, EMPTY_RULES, type Goal } from '../src/game/autopilot-config.ts';
 import { levelStartXp } from '../src/game/character.ts';
+import { BLACKSMITH_JOBS, BLACKSMITH_PRODUCTS } from '../src/game/farm.ts';
 import { projectTimeline, type TimelineStart, type TimelineStep } from '../src/game/timeline.ts';
 
 type Pt = { x: number; y: number };
@@ -127,17 +128,20 @@ interface Scenario {
   needs?: any[];
   consumables?: any[];
   config?: (configValue: typeof DEFAULT_CONFIG) => void;
+  farm?: Partial<typeof DEFAULT_CONFIG.farm>;
   rules?: Partial<typeof EMPTY_RULES>;
   skip?: string[];
   budget?: number;
   homeTownId?: number;
   bankTownId?: number;
   maxJobs?: number;
-  itemValue?: (id: number) => number;
 }
 function plan(source: Scenario): Plan {
   const config = structuredClone(DEFAULT_CONFIG);
   source.config?.(config);
+  if (source.farm) {
+    Object.assign(config.farm, source.farm);
+  }
   const jobs = source.jobs ?? [];
   return planAutopilot({
     start: start(source.start),
@@ -149,7 +153,6 @@ function plan(source: Scenario): Plan {
     config,
     rules: { ...structuredClone(EMPTY_RULES), ...source.rules },
     needs: source.needs ?? [],
-    itemValue: source.itemValue ?? (() => 0),
     hotels: source.hotels ?? [],
     consumables: source.consumables ?? [],
     homeTownId: source.homeTownId ?? 9,
@@ -296,7 +299,7 @@ test('J1 same place and energy: the job with more XP', () => {
 test('J2 money on top: the job that pays more', () => {
   const pick = plan({
     jobs: [job(1, { long: [100, 10] }), job(2, { long: [10, 200] })],
-    config: (configValue) => (configValue.priority = ['money', 'xp', 'quests', 'products', 'luck']),
+    config: (configValue) => (configValue.priority = ['money', 'xp', 'quests', 'luck']),
   });
   assert.equal(pick.tasks[0]!.key, 'job:2:long');
 });
@@ -385,15 +388,6 @@ test('J15 Queue jobs off: no jobs', () => {
   assert.match(pick.why, /Queue jobs is off/);
 });
 
-test('J16 products on top: the job dropping a $50 item beats a pure XP job', () => {
-  const pick = plan({
-    jobs: [job(1, { long: [10, 0, 12, { 800000: 1 }] }), job(2, { long: [100, 0] })],
-    itemValue: (id) => (id === 800000 ? 50 : 0),
-    config: (configValue) => (configValue.priority = ['products', 'xp', 'money', 'quests', 'luck']),
-  });
-  assert.equal(pick.tasks[0]!.key, 'job:1:long');
-});
-
 test("J17 the nearest of a job's places is used", () => {
   const pick = plan({ jobs: [job(1, { long: [100, 0], at: [point(5000), point(100)] })] });
   assert.deepEqual((pick.tasks[0]!.step as any).at, point(100));
@@ -402,7 +396,7 @@ test("J17 the nearest of a job's places is used", () => {
 test('J18 custom weights (money only) pick the money job', () => {
   const pick = plan({
     jobs: [job(1, { long: [200, 10] }), job(2, { long: [10, 200] })],
-    config: (configValue) => (configValue.customWeights = { quests: 0, xp: 0, money: 1, products: 0, luck: 0 }),
+    config: (configValue) => (configValue.customWeights = { quests: 0, xp: 0, money: 1, luck: 0 }),
   });
   assert.equal(pick.tasks[0]!.key, 'job:2:long');
 });
@@ -412,21 +406,18 @@ test('J19 quests on top with no open quest: the next goal (XP) decides', () => {
   assert.equal(pick.tasks[0]!.key, 'job:1:long');
 });
 
-test('L1 money, product drops and lucky finds are separate goals', () => {
+test('L1 money and lucky finds are separate goals', () => {
   const cash = job(1, { long: [0, 1000] });
-  const drops = job(2, { long: [0, 0, 12, { 800000: 1.5 }] });
   const lucky = job(3, { long: [0, 0] });
   lucky.values.long.luck = 0.5;
   lucky.luckValue = [100, 400];
   const pick = (priority: Goal[]) =>
     plan({
-      jobs: [cash, drops, lucky],
-      itemValue: (id) => (id === 800000 ? 100 : 0),
+      jobs: [cash, lucky],
       config: (configValue) => (configValue.priority = priority),
     }).tasks[0]!.key;
-  assert.equal(pick(['money', 'xp', 'quests', 'products', 'luck']), 'job:1:long');
-  assert.equal(pick(['products', 'xp', 'money', 'quests', 'luck']), 'job:2:long');
-  assert.equal(pick(['luck', 'xp', 'money', 'quests', 'products']), 'job:3:long');
+  assert.equal(pick(['money', 'xp', 'quests', 'luck']), 'job:1:long');
+  assert.equal(pick(['luck', 'xp', 'money', 'quests']), 'job:3:long');
 });
 
 test('L2 lucky finds use the max value, not the average', () => {
@@ -439,9 +430,159 @@ test('L2 lucky finds use the max value, not the average', () => {
   flat.luckValue = [300, 300];
   const pick = plan({
     jobs: [wide, flat],
-    config: (configValue) => (configValue.priority = ['luck', 'xp', 'money', 'quests', 'products']),
+    config: (configValue) => (configValue.priority = ['luck', 'xp', 'money', 'quests']),
   });
   assert.equal(pick.tasks[0]!.key, 'job:1:long');
+});
+
+// ---- Farm: selected jobs round-robin, floor, items, fallback ----------------------------------------------
+
+const farm = (jobs: number[], floor = 0.5, items = true) => ({ jobs, floor, items });
+const farmConfig = (configValue: typeof DEFAULT_CONFIG, jobs: number[], floor = 0.5) => {
+  configValue.modules.farm = true;
+  configValue.farm.jobs = jobs;
+  configValue.farm.floor = floor;
+};
+
+test('Farm1 farm jobs run in the selected round-robin order', () => {
+  const pick = plan({
+    jobs: [
+      job(1, { long: [10, 0, 12, { 100000: 5 }] }),
+      job(2, { long: [10, 0, 12, { 200000: 5 }] }),
+      job(3, { long: [10, 0, 12, { 300000: 5 }] }),
+    ],
+    maxJobs: 3,
+    config: (configValue) => farmConfig(configValue, [1, 2, 3]),
+  });
+  assert.deepEqual(keys(pick, 3), ['job:1:long', 'job:2:long', 'job:3:long']);
+  assert.equal(pick.farmActive, true);
+  assert.match(pick.tasks[0]!.why ?? '', /^farm: J1 · motivation 100%/);
+});
+
+test('Farm2 a farm job at the floor uses a motivation item first', () => {
+  const pick = plan({
+    jobs: [job(1, { long: [10, 0, 12, { 100000: 5 }], motivation: 0.5 }), job(2, { long: [100, 0] })],
+    consumables: [{ itemId: 5, name: 'Coffee', count: 1, value: 5, effect: { energy: 0, health: 0, motivation: 0.3 } }],
+    maxJobs: 1,
+    config: (configValue) => {
+      farmConfig(configValue, [1]);
+    },
+  });
+  assert.deepEqual(keys(pick, 2), ['use:5', 'job:1:long']);
+  assert.match(pick.tasks[0]!.why ?? '', /motivation 50%.*\(farm\)/);
+});
+
+test('Farm3 a farm job at the floor with no item is left out of the normal plan', () => {
+  const pick = plan({
+    jobs: [job(1, { long: [1000, 0, 12, { 100000: 5 }], motivation: 0.4 }), job(2, { long: [100, 0] })],
+    maxJobs: 1,
+    config: (configValue) => farmConfig(configValue, [1]),
+  });
+  assert.deepEqual(keys(pick, 1), ['job:2:long']);
+});
+
+test('Farm4 a farm job takes its duration with the most drops per energy', () => {
+  const pick = plan({
+    jobs: [job(1, { short: [10, 0, 1, { 100000: 1 }], long: [10, 0, 12, { 100000: 5 }] }), job(2, { long: [100, 0] })],
+    maxJobs: 1,
+    config: (configValue) => farmConfig(configValue, [1]),
+  });
+  assert.equal(pick.tasks[0]!.key, 'job:1:short');
+});
+
+test('Farm5 the farm floor, not the normal 75 %, decides on motivation items', () => {
+  const pick = plan({
+    jobs: [job(1, { long: [10, 0, 12, { 100000: 5 }], motivation: 0.6 }), job(2, { long: [100, 0] })],
+    consumables: [{ itemId: 5, name: 'Coffee', count: 1, value: 5, effect: { energy: 0, health: 0, motivation: 0.3 } }],
+    maxJobs: 1,
+    config: (configValue) => {
+      farmConfig(configValue, [1]);
+      configValue.modules.consumables = true;
+      configValue.consumables.motivation = true;
+    },
+  });
+  assert.deepEqual(keys(pick, 1), ['job:1:long']);
+});
+
+test('Farm6 a queued farm run counts for the round-robin', () => {
+  const pick = plan({
+    jobs: [job(1, { long: [10, 0, 12, { 100000: 5 }] }), job(2, { long: [10, 0, 12, { 200000: 5 }] })],
+    fixed: [jobStep(2, 0, 12, { fixed: { start: START_TIME - 3600, end: START_TIME } })],
+    maxJobs: 1,
+    config: (configValue) => farmConfig(configValue, [1, 2]),
+  });
+  assert.equal(pick.tasks[0]!.key, 'job:1:long');
+});
+
+test('Farm7 a discovered special is farmed when it drops more of the product', () => {
+  const normal = job(1, { long: [10, 0, 12, { 100000: 5 }] });
+  const special = {
+    job: normal,
+    at: point(100),
+    special: 'silver' as const,
+    values: {
+      long: {
+        duration: 3600,
+        energy: 12,
+        experience: 10,
+        money: 0,
+        luck: 0,
+        items: [{ itemId: 100000, expected: 10, percent: 1000 }],
+      },
+    },
+    valuesMotivation: 1,
+  };
+  const pick = plan({
+    jobs: [normal],
+    specialJobs: [special],
+    maxJobs: 1,
+    config: (configValue) => farmConfig(configValue, [1]),
+  });
+  assert.equal(pick.tasks[0]!.key, 'job:1:long:silver:100,0');
+});
+
+test('Farm8 floor 0 keeps farming at zero motivation and uses no item', () => {
+  const pick = plan({
+    jobs: [job(1, { long: [10, 0, 12, { 100000: 5 }], motivation: 0 }), job(2, { long: [100, 0] })],
+    consumables: [{ itemId: 5, name: 'Coffee', count: 1, value: 5, effect: { energy: 0, health: 0, motivation: 0.3 } }],
+    maxJobs: 1,
+    config: (configValue) => {
+      farmConfig(configValue, [1], 0);
+      configValue.modules.consumables = true;
+      configValue.consumables.motivation = true;
+    },
+  });
+  assert.deepEqual(keys(pick, 1), ['job:1:long']);
+});
+
+test('Farm9 the farm is off by default even when jobs are selected', () => {
+  const pick = plan({
+    jobs: [job(1, { long: [1, 0] }), job(2, { long: [100, 0] })],
+    maxJobs: 1,
+    farm: farm([1]),
+  });
+  assert.deepEqual(keys(pick, 1), ['job:2:long']);
+  assert.equal(pick.farmActive, false);
+});
+
+test('Farm11 the farm runs with Queue jobs off', () => {
+  const pick = plan({
+    jobs: [job(1, { long: [10, 0, 12, { 100000: 5 }] }), job(2, { long: [100, 0] })],
+    maxJobs: 1,
+    config: (configValue) => {
+      farmConfig(configValue, [1]);
+      configValue.modules.jobs = false;
+    },
+  });
+  assert.deepEqual(keys(pick, 1), ['job:1:long']);
+});
+
+test('Farm10 the blacksmith preset maps the eight products to their jobs in order', () => {
+  assert.deepEqual(
+    BLACKSMITH_PRODUCTS.map((product) => product.name),
+    ['Granite blocks', 'Hammer', 'Iron rod', 'Wood', 'Cotton', 'Wool', 'Leather', 'Coal'],
+  );
+  assert.deepEqual([...BLACKSMITH_JOBS], [25, 23, 85, 55, 5, 10, 17, 40]);
 });
 
 // ---- Short of energy: wait, sleep or an item ------------------------------------------------------------------
@@ -739,7 +880,7 @@ test('W10 the run after the sleep levels up although a cheaper XP job could too:
   const pick = plan({
     start: { energy: 2, experience: XP0 + GAP - 50 },
     hotels: room,
-    config: (configValue) => (configValue.priority = ['money', 'xp', 'quests', 'products', 'luck']),
+    config: (configValue) => (configValue.priority = ['money', 'xp', 'quests', 'luck']),
     jobs: [job(1, { long: [100, 500, 10] }), job(2, { long: [60, 0, 1] })],
   });
   assert.equal(pick.tasks[0]!.wake!.energy, 10);
@@ -941,7 +1082,7 @@ test('Q8 XP on top, quests second: the much better XP job first', () => {
   const pick = plan({
     jobs: [questJob(1, 10), job(2, { long: [200, 0] })],
     needs: [itemNeed(700000, 1)],
-    config: (configValue) => (configValue.priority = ['xp', 'quests', 'money', 'products', 'luck']),
+    config: (configValue) => (configValue.priority = ['xp', 'quests', 'money', 'luck']),
   });
   assert.equal(pick.tasks[0]!.key, 'job:2:long');
 });
@@ -951,7 +1092,7 @@ test("Q9 XP on top: the quest's XP reward makes the quest job the best XP", () =
   const pick = plan({
     jobs: [questJob(1, 100), job(3, { long: [150, 0] })],
     needs: [itemNeed(700000, 1, { xpPerUnit: 200 })],
-    config: (configValue) => (configValue.priority = ['xp', 'quests', 'money', 'products', 'luck']),
+    config: (configValue) => (configValue.priority = ['xp', 'quests', 'money', 'luck']),
   });
   assert.equal(pick.tasks[0]!.key, 'job:1:long');
 });
@@ -1022,7 +1163,7 @@ test('S1 a discovered gold job at 100 s still beats the normal job: real boosted
   assert.equal(off.tasks[0]!.key, 'job:1:long');
 });
 
-test('S2 a special job does not scale its products with motivation', () => {
+test('S2 a special job has its own extra drops (used here as quest progress)', () => {
   const normal = job(1, { long: [0, 0, 12, { 700000: 1 }], motivation: 0.5 });
   const special = {
     job: normal,
@@ -1081,7 +1222,7 @@ test('S4 at 50 % motivation silver pays 100 XP, under the 118 XP normal job', ()
 
 test('S5 same-spot jobs win unless another spot is more than 20 % better', () => {
   const moneyFirst = (configValue: typeof DEFAULT_CONFIG) => {
-    configValue.priority = ['money', 'xp', 'quests', 'products', 'luck'];
+    configValue.priority = ['money', 'xp', 'quests', 'luck'];
   };
   const same = job(1, { long: [0, 100] });
   const slightlyBetter = job(2, { long: [0, 120], at: [point(10)] });

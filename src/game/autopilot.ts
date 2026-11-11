@@ -1,9 +1,10 @@
 // Autopilot planner: from a snapshot (character, server queue, jobs, quests, hotels, settings) it plans the
-// next tasks greedily along the timeline, safety first: HP sleep → bank → jobs by priority, with energy
+// next tasks greedily along the timeline, safety first: HP sleep → bank → farm / jobs by priority, with energy
 // sleeps / items when they get the energy sooner than waiting (items sized to the next level-up).
 // Pure: no requests; the runner in state.ts sends.
 // Job value: each goal's gain per cost, normalised by the best candidate for that goal, weighted by the
 // ranking (autopilot-config.ts). Cost: energy (+ walking at the energy it would regenerate meanwhile) or time.
+// The farm is a hard selection of product jobs, round-robin, independent of the goal score.
 
 import {
   type AutopilotConfig,
@@ -14,6 +15,7 @@ import {
   type PlannedTask,
 } from './autopilot-config.ts';
 import { levelStartXp, type Position } from './character.ts';
+import { farmProduct } from './farm.ts';
 import {
   DURATION_KEYS,
   type DurationKey,
@@ -85,8 +87,6 @@ export interface PlanInput {
   rules: AutopilotRules;
   /** What open quests still need (the Quests goal). */
   needs: RouteNeed[];
-  /** Sell value of an item (the Products goal). */
-  itemValue: (itemId: number) => number;
   hotels: HotelOption[];
   /** Usable consumables (already filtered by the reserve). */
   consumables?: Consumable[] | undefined;
@@ -130,6 +130,8 @@ export interface Plan {
   walk: number;
   /** The exchange rates the values are in: best gain per cost per goal at the plan's start. */
   rates: Record<Goal, number>;
+  /** A farm job is in the plan: cancel-for-better is skipped while the farm still has eligible jobs. */
+  farmActive: boolean;
 }
 
 /** A cancel-check alternative: keep the first `from` queued tasks, replan the rest. */
@@ -201,6 +203,8 @@ interface Candidate {
   special: SpecialKind | null;
   /** The job's own XP for this run (motivation applied), without quest rewards. */
   xp: number;
+  /** Expected units of all listed product drops for this run. */
+  drops: number;
   gains: Record<string, number>;
   raw: Record<Goal, number>;
   cost: number;
@@ -241,7 +245,6 @@ const GOAL_WORD: Record<Goal, string> = {
   quests: 'quest progress',
   xp: 'XP',
   money: 'money',
-  products: 'product drops',
   luck: 'lucky finds',
 };
 
@@ -274,6 +277,12 @@ export function planAutopilot(input: PlanInput): Plan {
   };
   const skip = input.skip ?? new Set<string>();
   const excluded = new Set(input.rules.excludedJobs);
+  // Farm jobs that reached the floor with no item: hidden from the normal score for the rest of this plan.
+  const farmOut = new Set<number>();
+  const farmIds = new Set(cfg.farm.jobs);
+  const farmOrder = new Map(cfg.farm.jobs.map((jobId, index) => [jobId, index]));
+  // Runs already queued or planned per farm job: the round-robin picks the job with the fewest so far.
+  const farmRuns = new Map<number, number>();
   const remaining: Record<string, number> = Object.fromEntries(
     input.needs.map((routeNeed) => [routeNeed.key, routeNeed.amount]),
   );
@@ -287,6 +296,9 @@ export function planAutopilot(input: PlanInput): Plan {
   for (const st of input.fixed) {
     if (st.kind !== 'job') {
       continue;
+    }
+    if (st.jobId !== undefined && farmIds.has(st.jobId)) {
+      farmRuns.set(st.jobId, (farmRuns.get(st.jobId) ?? 0) + 1);
     }
     const job = input.jobs.find((jobInfo) => jobInfo.id === st.jobId);
     const dur = job && closestDuration(job, st.duration);
@@ -308,6 +320,8 @@ export function planAutopilot(input: PlanInput): Plan {
   let rates: Record<Goal, number> | null = input.rates ?? null;
   let budget = input.budget;
   let banked = false;
+  /** At most one motivation item per plan: its scope (one job or all) is not verified live yet. */
+  let motivationItemUsed = false;
   const stock = new Map((input.consumables ?? []).map((consumable) => [consumable.itemId, consumable.count]));
   const useMod = mods.consumables;
 
@@ -395,16 +409,22 @@ export function planAutopilot(input: PlanInput): Plan {
   };
 
   /**
-   * All job candidates from a state, scored by the priority against the exchange rates. `level` sets the
-   * level-up refund (a level-up refills energy: each XP point brings maxEnergy ÷ XP-per-level of it back).
-   * `done.drop` carries the motivation already spent by the queue and earlier planned runs.
+   * All job candidates from a state, before scoring. `level` sets the level-up refund (a level-up refills
+   * energy: each XP point brings maxEnergy ÷ XP-per-level of it back). `done.drop` carries the motivation
+   * already spent by the queue and earlier planned runs. `only` limits the list to these job ids (the farm).
    */
-  const candidates = (from: Position, health: number, level = start.level, done = { remaining, drop }): Candidate[] => {
+  const buildCandidates = (
+    from: Position,
+    health: number,
+    level = start.level,
+    done = { remaining, drop },
+    only?: Set<number>,
+  ): Candidate[] => {
     const list: Candidate[] = [];
     const xpPerLevel = levelStartXp(level + 1, start.maxLevel) - levelStartXp(level, start.maxLevel);
     const refundPerXp = xpPerLevel > 0 ? start.maxEnergy / xpPerLevel : 0;
 
-    /** Scores one run at one location. `values` are the rewards the game shows there now. */
+    /** Adds one run at one location. `values` are the rewards the game shows there now. */
     const addCandidate = (
       job: JobInfo,
       duration: DurationKey,
@@ -444,10 +464,7 @@ export function planAutopilot(input: PlanInput): Plan {
       const entryFactor = motivationFactor(Math.max(0, job.motivation - (done.drop.get(job.id) ?? 0)));
       const fade = baseFactor > 0 ? entryFactor / baseFactor : 0;
       const xp = values.experience * fade;
-      const products = (values.items ?? []).reduce(
-        (accumulator, current) => accumulator + current.expected * input.itemValue(current.itemId),
-        0,
-      );
+      const drops = (values.items ?? []).reduce((accumulator, current) => accumulator + current.expected, 0);
       // The lucky find is a separate goal: its chance per run × the top of the job's find range.
       const luck = Math.max(0, values.luck * fade) * Math.max(0, job.luckValue?.[1] ?? 0);
       const hpSeconds = hpLoss > 0 ? regenSeconds(0, hpLoss, start.maxHealth, start.healthRegen) : 0;
@@ -469,16 +486,20 @@ export function planAutopilot(input: PlanInput): Plan {
         values,
         special,
         xp,
+        drops,
         gains,
         cost: Math.max(cost, 1e-6),
         score: 0,
         by: noGoals(),
-        raw: { ...noGoals(), quests, xp: xp + rewardXp, money: values.money * fade + rewardMoney, products, luck },
+        raw: { ...noGoals(), quests, xp: xp + rewardXp, money: values.money * fade + rewardMoney, luck },
       });
     };
 
     for (const job of input.jobs) {
-      if (!isDoable(job) || excluded.has(job.id)) {
+      if (only && !only.has(job.id)) {
+        continue;
+      }
+      if (!isDoable(job) || excluded.has(job.id) || farmOut.has(job.id)) {
         continue;
       }
       const locs = input.locations(job.groupid);
@@ -507,7 +528,10 @@ export function planAutopilot(input: PlanInput): Plan {
     }
 
     for (const special of input.specialJobs ?? []) {
-      if (!isDoable(special.job) || excluded.has(special.job.id)) {
+      if (only && !only.has(special.job.id)) {
+        continue;
+      }
+      if (!isDoable(special.job) || excluded.has(special.job.id) || farmOut.has(special.job.id)) {
         continue;
       }
       const travel = wayTime(from, special.at);
@@ -528,8 +552,16 @@ export function planAutopilot(input: PlanInput): Plan {
       }
     }
 
-    // Each goal in units of its exchange rate (the best rate at the plan's start), so a crumb of quest
-    // progress stays a crumb and values of different plans compare. A goal with no rate yet: this list's best.
+    return list;
+  };
+
+  /**
+   * Candidates scored by the priority against the exchange rates: each goal in units of its exchange rate
+   * (the best rate at the plan's start), so a crumb of quest progress stays a crumb and values of different
+   * plans compare. A goal with no rate yet uses this list's best.
+   */
+  const candidates = (from: Position, health: number, level = start.level, done = { remaining, drop }): Candidate[] => {
+    const list = buildCandidates(from, health, level, done);
     const best = bestRates(list);
     for (const group of GOALS) {
       if (rates && rates[group] > 0) {
@@ -548,7 +580,70 @@ export function planAutopilot(input: PlanInput): Plan {
     }
     return list
       .filter((candidate) => candidate.score > 0)
-      .sort((firstValue, second) => second.score - firstValue.score);
+      .sort((firstValue, secondValue) => secondValue.score - firstValue.score);
+  };
+
+  type FarmStep = { kind: 'job'; candidate: Candidate } | { kind: 'item'; task: PlannedTask };
+
+  /**
+   * The next farm step: the selected job with the fewest runs in the queue and this plan (list order on a
+   * tie), at the duration with the most expected drops per energy. At or below the floor it uses a motivation
+   * item once per plan, else hides the job from this plan so the normal priority takes over.
+   */
+  const nextFarm = (from: Position, health: number, level: number): FarmStep | null => {
+    if (!mods.farm || !cfg.farm.jobs.length) {
+      return null;
+    }
+    for (let guard = 0; guard <= cfg.farm.jobs.length; guard++) {
+      const list = buildCandidates(from, health, level, { remaining, drop }, farmIds);
+      const bestByJob = new Map<number, Candidate>();
+      for (const candidate of list) {
+        if (!(candidate.drops > 0)) {
+          continue;
+        }
+        const current = bestByJob.get(candidate.job.id);
+        const rate = candidate.drops / Math.max(candidate.energy, 1e-6);
+        const currentRate = current ? current.drops / Math.max(current.energy, 1e-6) : Number.NEGATIVE_INFINITY;
+        if (
+          !current ||
+          rate > currentRate ||
+          (rate === currentRate && candidate.values.duration > current.values.duration)
+        ) {
+          bestByJob.set(candidate.job.id, candidate);
+        }
+      }
+      const next = [...bestByJob.values()]
+        .sort(
+          (firstValue, secondValue) =>
+            (farmRuns.get(firstValue.job.id) ?? 0) - (farmRuns.get(secondValue.job.id) ?? 0) ||
+            (farmOrder.get(firstValue.job.id) ?? 0) - (farmOrder.get(secondValue.job.id) ?? 0),
+        )
+        .at(0);
+      if (!next) {
+        return null;
+      }
+      const projected = Math.min(1, Math.max(0, next.job.motivation - (drop.get(next.job.id) ?? 0)));
+      if (cfg.farm.floor > 0 && projected <= cfg.farm.floor) {
+        const item = cfg.farm.items && !motivationItemUsed ? pickItem('motivation', 0.01) : null;
+        if (!item) {
+          farmOut.add(next.job.id);
+          continue;
+        }
+        motivationItemUsed = true;
+        // Negative drop = an item boost planned for this job, so the next run is scored at the higher motivation.
+        drop.set(next.job.id, (drop.get(next.job.id) ?? 0) - item.effect.motivation);
+        const task = useTask(
+          item,
+          `${next.job.name} motivation ${Math.round(projected * 100)}%: use ${item.name} (farm)`,
+        );
+        return {
+          kind: 'item',
+          task: { ...task, step: { ...task.step, title: `Use ${item.name} (${next.job.name})` } },
+        };
+      }
+      return { kind: 'job', candidate: next };
+    }
+    return null;
   };
 
   /** What a run does for open quests, before it is counted: `Cotton for "Farmer's woes" (5 left)`. */
@@ -864,6 +959,7 @@ export function planAutopilot(input: PlanInput): Plan {
   // Your inserted sleeps / bank stops, in time order: each goes in once the plan reaches its time.
   const inserts = [...input.rules.inserts].sort((firstValue, second) => firstValue.at - second.at);
   let value = 0;
+  let farmActive = false;
   while (tasks.length < maxTasks && jobsPlanned < planJobs && tl.end < horizonEnd) {
     const source = tl.final;
     if (inserts.length && (inserts[0]?.at ?? Number.POSITIVE_INFINITY) <= tl.end) {
@@ -923,36 +1019,51 @@ export function planAutopilot(input: PlanInput): Plan {
         continue;
       }
     }
-    if (!mods.jobs) {
+    if (!mods.jobs && !mods.farm) {
       break;
     }
-    const ranked = candidates(source.at, source.health, source.level);
-    const best = ranked[0];
-    const bestSameSpot = ranked.find((candidate) => candidate.at.x === source.at.x && candidate.at.y === source.at.y);
-    const moveMargin = cfg.jobs.moveMargin ?? 0.2;
-    const candidate =
-      best &&
-      bestSameSpot &&
-      (best.at.x !== source.at.x || best.at.y !== source.at.y) &&
-      best.score <= bestSameSpot.score * (1 + moveMargin)
-        ? bestSameSpot
-        : best;
+    const farmStep = nextFarm(source.at, source.health, source.level);
+    if (farmStep?.kind === 'item') {
+      push(farmStep.task);
+      continue;
+    }
+    let candidate: Candidate | undefined;
+    if (farmStep?.kind === 'job') {
+      candidate = farmStep.candidate;
+    } else if (mods.jobs) {
+      const ranked = candidates(source.at, source.health, source.level);
+      const best = ranked[0];
+      const bestSameSpot = ranked.find((candidate) => candidate.at.x === source.at.x && candidate.at.y === source.at.y);
+      const moveMargin = cfg.jobs.moveMargin ?? 0.2;
+      candidate =
+        best &&
+        bestSameSpot &&
+        (best.at.x !== source.at.x || best.at.y !== source.at.y) &&
+        best.score <= bestSameSpot.score * (1 + moveMargin)
+          ? bestSameSpot
+          : best;
+    }
     if (!candidate) {
       break;
     }
-    if (useMod && cfg.consumables.motivation && candidate.job.motivation <= 0.75) {
+    const farm = farmStep?.kind === 'job';
+    if (!farm && !motivationItemUsed && useMod && cfg.consumables.motivation && candidate.job.motivation <= 0.75) {
       const item = pickItem('motivation', 0.01);
       if (
         item &&
         !tasks.some((task) => task.key === `use:${item.itemId}` && task.step.title.includes(candidate.job.name))
       ) {
+        motivationItemUsed = true;
+        const useInfo = useTask(
+          item,
+          `${candidate.job.name} motivation ${Math.round(candidate.job.motivation * 100)}%: use ${item.name}`,
+        );
         push({
-          ...useTask(
-            item,
-            `${candidate.job.name} motivation ${Math.round(candidate.job.motivation * 100)}%: use ${item.name}`,
-          ),
-          step: { kind: 'action', title: `Use ${item.name} (${candidate.job.name})` },
+          ...useInfo,
+          step: { ...useInfo.step, title: `Use ${item.name} (${candidate.job.name})` },
         });
+        // Negative drop = the planned item boost; later runs of this job are scored at the higher motivation.
+        drop.set(candidate.job.id, (drop.get(candidate.job.id) ?? 0) - item.effect.motivation);
         candidate.job = {
           ...candidate.job,
           motivation: Math.min(1, candidate.job.motivation + item.effect.motivation),
@@ -1021,12 +1132,14 @@ export function planAutopilot(input: PlanInput): Plan {
     );
     const forQuests = questParts(candidate.gains);
     const special = candidate.special ? ` · ${candidate.special} job` : '';
-    const baseWhy =
-      goal === 'quests' && forQuests.length
+    const projected = Math.min(1, Math.max(0, candidate.job.motivation - (drop.get(candidate.job.id) ?? 0)));
+    const baseWhy = farm
+      ? `farm: ${farmProduct(candidate.job.id)?.name ?? candidate.job.name} · motivation ${Math.round(projected * 100)}%${special}`
+      : goal === 'quests' && forQuests.length
         ? `quest: ${forQuests.join('; ')}${special}`
         : `best ${GOAL_WORD[goal]} per ${cfg.per === 'energy' ? 'energy' : 'hour'}${forQuests.length ? ` · also ${forQuests.join('; ')}` : ''}${special}`;
     push({
-      module: 'jobs',
+      module: farm ? 'farm' : 'jobs',
       key: candidate.key,
       step: {
         kind: 'job',
@@ -1052,6 +1165,10 @@ export function planAutopilot(input: PlanInput): Plan {
       last.end <= horizonEnd ? 1 : Math.max(0, (horizonEnd - last.start) / Math.max(1, last.end - last.start));
     value += candidate.score * candidate.cost * inside;
     drop.set(candidate.job.id, (drop.get(candidate.job.id) ?? 0) + MOTIVATION_LOSS[candidate.duration]);
+    if (farm) {
+      farmActive = true;
+      farmRuns.set(candidate.job.id, (farmRuns.get(candidate.job.id) ?? 0) + 1);
+    }
     jobsPlanned++;
     for (const [gainKey, gainValue] of Object.entries(candidate.gains)) {
       if ((remaining[gainKey] ?? 0) > 1e-9) {
@@ -1062,10 +1179,12 @@ export function planAutopilot(input: PlanInput): Plan {
   const first = tasks[0];
   const why =
     first?.why ??
-    (!mods.jobs ? 'Queue jobs is off.' : 'Nothing worth doing (no doable job, or everything is excluded).');
+    (!mods.jobs && !mods.farm
+      ? 'Queue jobs is off.'
+      : 'Nothing worth doing (no doable job, or everything is excluded).');
   const walk = tl.steps.reduce(
     (accumulator, st) => accumulator + Math.max(0, Math.min(st.depart + st.travel, horizonEnd) - st.depart),
     0,
   );
-  return { tasks, timeline: tl, why, value, queuedValue, walk, rates };
+  return { tasks, timeline: tl, why, value, queuedValue, walk, rates, farmActive };
 }

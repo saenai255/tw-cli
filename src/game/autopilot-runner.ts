@@ -350,7 +350,6 @@ export class AutopilotRunner {
       config: this.config,
       rules: gameState.autopilot.rules,
       needs: gameState.autopilotNeeds(),
-      itemValue: (id) => gameState.items?.get(id)?.sell ?? 0,
       hotels,
       consumables: this.consumables(),
       homeTownId: character.homeTown?.id,
@@ -490,7 +489,7 @@ export class AutopilotRunner {
 
   /** The planner's input without functions, compact enough for the log (jobs: values per duration). */
   private debugInput(input: PlanInput): Record<string, unknown> {
-    const { jobs, locations, wayTime: _w, itemValue: _v, skip, specialJobs, ...rest } = input;
+    const { jobs, locations, wayTime: _w, skip, specialJobs, ...rest } = input;
     const valuesOf = (values: Partial<Record<DurationKey, JobDurationValues>>) =>
       Object.fromEntries(
         Object.entries(values).map(([entryKey, durationValues]) => [
@@ -828,6 +827,14 @@ export class AutopilotRunner {
     const gameState = this.state;
     const config = this.config;
     if (gameState.queue.length === 0 || Date.now() - this.lastCancel < config.cancel.cooldown * 1000 || !this.plan) {
+      return false;
+    }
+    // The farm is a hard selection while a selected job is above its floor: do not trade it for a normal plan.
+    if (this.plan.farmActive) {
+      gameState.debug.once('cancel', 'autopilot', 'Cancel check: farm job planned, keeping the queue', {
+        queue: gameState.queue.map((task) => task.title),
+        next: this.plan.tasks.slice(0, 5).map((task) => task.step.title),
+      });
       return false;
     }
     // Construction is a manual town task the autopilot never plans; leave it alone.
@@ -1282,7 +1289,8 @@ export class AutopilotRunner {
         gameState.info(
           `Autopilot: used ${gameState.itemName(itemId)}${result.effects.length ? `: ${result.effects.join(' ')}` : ''} (${task.why ?? ''}).`,
         );
-        if (/motivation/i.test(task.step.title)) {
+        const itemInfo = gameState.items?.get(itemId);
+        if (itemInfo?.usebonus?.some((textValue) => /work motivation/i.test(textValue))) {
           void gameState.loadJobs(true); // motivation is in the job values
         }
         this.replan('item used');

@@ -27,6 +27,7 @@ the summary. Small gains compound; nobody needs to schedule a cleanup.
 - `docs/code-style.md`: how code here should read (intent over mechanics, types over comments, pure core,
   interfaces over classes, full names, errors as values, tests as specs, structured logs). Read before writing code.
 - `docs/autopilot.md`: Autopilot spec, architecture, modules, decisions, what is not built yet.
+- `docs/farming.md`: product-farm module, blacksmith preset, item/job map, motivation-floor trade-off.
 - `docs/game-mechanics.md`: The West as the client sees it: endpoints, formulas, units, verified vs unverified.
 - `docs/tui.md`: screens, key handling (global vs screen keys), input capture, rendering conventions.
 - `docs/endpoints.json`: game endpoints extracted from the client bundle (`npm run endpoints`).
@@ -47,9 +48,10 @@ the summary. Small gains compound; nobody needs to schedule a cleanup.
 
 - `src/game/`: game logic, no UI. `state.ts` (GameState: owns the client, keeps state in sync), one module per area
   (jobs, tasks, quests, hotel, trade, townhall, event, loginbonus, duels, …), the autopilot (`autopilot*.ts`, `timeline.ts`,
-  `quest-buy.ts` for buying quest items), `debug-log.ts` (`state.debug`: everything, with data;
-  hourly JSONL files kept 24 h in `<config dir>/debug/`, Debug screen `g x`), `calibration.ts` (what the
-  autopilot learns from reports, health, motivation and sleeps; `calibration.json`).
+  `quest-buy.ts` for buying quest items, `farm.ts` for the blacksmith farm preset), `debug-log.ts`
+  (`state.debug`: everything, with data; hourly JSONL files kept 24 h in `<config dir>/debug/`, Debug screen
+  `g x`), `calibration.ts` (what the autopilot learns from reports, health, motivation and sleeps;
+  `calibration.json`).
 - `src/tui/`: Ink (React) screens; `app.ts` is the shell (header, nav, ticker, global keys), `root.ts` connects.
 - `src/util/`: `json.ts` (narrowing unknown JSON), `errors.ts` (`errorMessage` for a caught value), `defined.ts`
   (drop undefined props), disk cache, wake detection.
@@ -103,7 +105,12 @@ the summary. Small gains compound; nobody needs to schedule a cleanup.
   smallest item that covers the next run and the energy still needed for the next level-up, waiting up to an
   hour for a level-up; if none covers the level-up need, the largest goes first. A level-up farther than that
   wait but within one refill uses the item even when each single wait is short.
-- Job rewards have separate goals: Money = cash pay, Products = listed item drops × sell price, Lucky finds =
-  luck chance × max `minMaxItemVal`. Never fold luck into Money or Products.
+- Job goals stay separate: Money = cash pay, Lucky finds = luck chance × max `minMaxItemVal`. There is no
+  sell-price Products goal: product farming is the **Farm** module (selected jobs in round-robin, best duration
+  per energy, a motivation floor with items, then the normal priority). Never fold luck into Money; farm
+  products are their own module, not a goal.
+- Farm products are counted, not valued by shop sell price. The blacksmith preset is the eight early blacksmith
+  product jobs (`src/game/farm.ts`); the floor is per job, one motivation item per plan (its scope is unverified),
+  and below-floor farm jobs are hidden from the normal score for the rest of the plan.
 - Seasonal events get a `g e` tab only while one runs: all personal/community rewards including claimed, friends
   who can still receive points, and one bulk action to send to all eligible friends (confirm with `y`).

@@ -190,7 +190,7 @@ export function EventScreen({ state, width, height, onCapture, onExit, active = 
     ? `${event.friendsbar?.label ?? 'Send event points'} to ${eligible.length} friend(s)? y / n`
     : sending
       ? 'Sending…'
-      : 'a send to all · u refresh · j k scroll · Esc back';
+      : 'a give points to all ready friends · u refresh · j k scroll · Esc back';
   return createElement(
     Box,
     { flexDirection: 'column', width, height },

@@ -18,7 +18,7 @@ import { buyMobileTrader, MarketApi, shopBuy } from './trade.ts';
 /** A quest that only waits for its time window: the quest log is re-read this often so it finishes inside it. */
 const WINDOW_CHECK_MS = 10 * 60_000;
 
-/** Picks a reward option by the priority: XP / money / items; an item you could wear now that beats yours always wins. */
+/** Picks a reward option by the priority: XP / money; an item you could wear now that beats yours always wins. */
 export function chooseReward(
   options: { id: number; text: string }[],
   config: AutopilotConfig,
@@ -39,7 +39,7 @@ export function chooseReward(
     if (/dollar|\$/i.test(textValue)) {
       return width.money * count;
     }
-    return width.products * 100; // an item: valued like a product
+    return 0; // other item rewards: only taken when nothing better (or an upgrade, above)
   };
   return options.reduce((accumulator, current) =>
     score(current.text) > score(accumulator.text) ? current : accumulator,

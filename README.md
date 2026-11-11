@@ -77,19 +77,25 @@ In the TUI, press `?` for help on any screen. Keys are vim-like: `Esc` always go
 The daily login bonus is collected automatically when the TUI starts; if that fails, `daily bonus pending` stays
 in the header and the next start tries again. Active seasonal events show their personal progress and any ready
 event items in the header. `g e` opens the event tab while one runs: every personal and community reward (including
-claimed ones), friends who can still receive event currency, and `a` to send points to all of them.
+claimed ones), and the friends bar. `a` then `y` gives the event currency to every friend whose cooldown is over;
+`u` refreshes the list. The send is bulk only, one gift per friend per cooldown.
 
 ## Autopilot
 
 Plays the character while the TUI is open (`g a`; `R` runs / pauses, paused only shows what it would do). Every
 part is a toggle with safe defaults, and the plan pane says what it will do next and why.
 
-- **Jobs** by your ranked goals (quests, XP, cash, product drops, lucky finds), planned 6 h ahead, per energy or
-  per hour. Money is job and quest cash, Products is listed item drops at their sell price, Lucky finds is the
-  luck chance × max find value; each is scored separately. Reward values follow the game's 25 % motivation
-  breakpoints, and each run's motivation loss is tracked. It stays at the current spot unless another is 20 %
-  better, and a server-full queue is waited out, not retried job by job. When the game page has no position yet
-  it waits for one instead of planning from the map origin.
+- **Jobs** by your ranked goals (quests, XP, cash, lucky finds), planned 6 h ahead, per energy or per hour.
+  Money is job and quest cash, Lucky finds is the luck chance × max find value; each is scored separately.
+  Reward values follow the game's 25 % motivation breakpoints, and each run's motivation loss is tracked. It
+  stays at the current spot unless another is 20 % better, and a server-full queue is waited out, not retried
+  job by job. When the game page has no position yet it waits for one instead of planning from the map origin.
+- **Farm selected jobs** round-robin (`g a` → Farm, off by default): pick 5–10 jobs in the picker (`Space`
+  chooses, `/` filters by job or product, `J K` sets the order, `P` loads the eight early blacksmith-product
+  jobs). It takes each job's best duration per energy, uses a motivation item when the next job reaches the
+  floor (50 % by default), and drops that job back to the normal priority when no item is left. Product drops
+  do not depend on motivation, so a floor of 0 is pure harvesting; see
+  [`docs/farming.md`](docs/farming.md).
 - **Silver/gold jobs** discovered on the map can be planned at their exact location with the real
   `job/job` values; the toggle is off by default and the autopilot does not scan the map itself.
 - **Sleep** when out of energy or low on HP, and wakes early once energy is enough to level up or for the next
@@ -104,8 +110,8 @@ part is a toggle with safe defaults, and the plan pane says what it will do next
   trader, or on the market (instant buy, then a trip to collect). It counts walking against price, keeps to
   $3,000 per quest in shops ($5,000 on the market) and to the daily spend cap.
 - **NPC duels** for XP when the record says they are won and beat the best job (never players).
-- Cancels queued tasks when a fresh plan is clearly better, retries failures with backoff, and learns drop rates,
-  HP loss and hotel rates from your own game.
+- Cancels queued tasks when a fresh plan is clearly better (not while a farm job is planned), retries failures
+  with backoff, and learns drop rates, HP loss and hotel rates from your own game.
 
 Not yet: "Go to …", "Resolve / Accept: …" and "Lose against …" quest steps (skipped and logged). Details in
 [`docs/autopilot.md`](docs/autopilot.md).

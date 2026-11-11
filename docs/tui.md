@@ -53,6 +53,10 @@ Ink (React without JSX: `const h = React.createElement`). Shell in `src/tui/app.
   highlighted quest, `*` silver/gold jobs discovered on the map), detail with the effective motivation reward
   tier, xp per energy, real location values when `job/job` has loaded, luck chance, queue with its end time and
   total. No chat here.
+- **Autopilot** (`autopilot.ts`, `g a`): left the priority and module settings, right the plan pane. `Q` opens
+  the queue view, `R` runs/pauses, `X` stops. On the `farm jobs` row, `Space` opens the farm job picker: `/`
+  filters by job or product, `Space` adds/removes, `J K` sets the round-robin order, `P` loads the blacksmith
+  preset, `Esc` closes. The picker captures global keys while open.
 - **Debug** (`debug.ts`, mode `debug`, `g x`): left the debug log (`state.debug`, newest followed at the bottom
   until you move up; `f` category, `/` title filter), right the selected entry's data as pretty JSON (`l`, then `j k`
   scroll). `Tab` switches to **Now**: `runner.context()` live, one line per field, lists one item per line.
@@ -67,8 +71,8 @@ Ink (React without JSX: `const h = React.createElement`). Shell in `src/tui/app.
   time, and buys with `Enter`; the bag and offers are re-read after a buy.
 - **Event** (`event.ts`, mode `event`, `g e`, only while `state.event` exists): all personal rewards
   (claimed / next / locked) and community rewards from `ceData`, plus friends who can still receive the event
-  currency. `a` + `y` sends to all eligible friends (`friendsbar/event_all`), `u` reloads the friends list,
-  `j k` / PgUp PgDn scroll. The header keeps the event progress line.
+  currency. `a` + `y` sends to all eligible friends (`friendsbar/event_all`); there is no per-friend send yet.
+  `u` reloads the friends list, `j k` / PgUp PgDn scroll. The header keeps the event progress line.
 - **Chat** (`chat.ts`, mode `chat`, `g c`): for the town room, a third column lists the clients in the room with
   presence (● online / ◐ idle, 5 min), name, role (Mayor / Councillor / Citizen / Guest) and level, online-first.
   It is hidden below 90 columns with a note; whisper/saloon rooms keep the two-column layout. The town room is

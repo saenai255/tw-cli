@@ -6,24 +6,29 @@ screen (`g a`). Spec agreed with the user in a grill session ("Decisions").
 
 ## Files
 
-| File                                                     | What                                                                                                                                                                                       |
-| -------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `src/game/timeline.ts`                                   | Pure projection of a task list: travel, waits, regen, energy/HP/XP/level/cash per step, level-up refill, partial sleeps, instant actions.                                                  |
-| `src/game/autopilot-config.ts`                           | Settings, rules, saved plan, spend tracker, duel record (`autopilot.json` in the config dir); `goalWeights`, `fingerprint`, `duelOutlook`.                                                 |
-| `src/game/autopilot.ts`                                  | Pure planner `planAutopilot(input)`: HP → bank → inserts → jobs by priority, energy sleeps / level-up-sized consumables when short. `parseConsumable`, `expectedHpLoss`.                   |
-| `src/game/autopilot-runner.ts`                           | `AutopilotRunner` (`state.runner`): replans on input change, sends tasks, wakes from sleep, deposits, uses items, cancels for a better plan, NPC duels for XP, retries/backoff, spend cap. |
-| `src/game/special-jobs.ts`                               | 24 h disk cache of map-discovered silver/gold positions and their raw `job/job` replies.                                                                                                   |
-| `src/game/autopilot-quests.ts`                           | `QuestModule`: finish (reward by priority), wear + restore gear, buy quest items, pick up market goods, accept saloon quests, re-read quests waiting for a time window. `chooseReward`.    |
-| `src/game/quest-buy.ts`                                  | Buying quest items no job drops: `chooseBuys` (pure: source per item within the limits), `BuyCatalog` (shops, mobile trader, market offers the runner read; `state.buyCatalog`).           |
-| `src/game/debug-log.ts`, `src/tui/debug.ts`              | Debug log (`state.debug`) and its screen (`g x`); see "Debugging".                                                                                                                         |
-| `src/tui/autopilot.ts`                                   | Screen: priority, module toggles and values on the left, plan pane (`PlanPane`, rows from `planRows`) on the right; `Q` full queue view.                                                   |
-| `test/quest-buy.test.ts`                                 | Buying quest items: ~120 hand-reasoned cases (parsing, source choice, catalog, planner trips, state, buying against a fake server).                                                        |
-| `test/autopilot.test.ts`, `test/social.test.ts` (runner) | Timeline, config, planner, consumables, inserts, screen, queue view, rewards, duels; runner against a fake server.                                                                         |
+| File                                                     | What                                                                                                                                                                                                                         |
+| -------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `src/game/timeline.ts`                                   | Pure projection of a task list: travel, waits, regen, energy/HP/XP/level/cash per step, level-up refill, partial sleeps, instant actions.                                                                                    |
+| `src/game/autopilot-config.ts`                           | Settings, rules, saved plan, spend tracker, duel record (`autopilot.json` in the config dir); `goalWeights`, `fingerprint`, `duelOutlook`.                                                                                   |
+| `src/game/autopilot.ts`                                  | Pure planner `planAutopilot(input)`: HP → bank → inserts → farm → jobs by priority, energy sleeps / level-up-sized consumables when short. `parseConsumable`, `expectedHpLoss`.                                              |
+| `src/game/farm.ts`                                       | Blacksmith farm preset: the eight early product jobs in round-robin order (`docs/farming.md`).                                                                                                                               |
+| `src/game/autopilot-runner.ts`                           | `AutopilotRunner` (`state.runner`): replans on input change, sends tasks, wakes from sleep, deposits, uses items, cancels for a better plan (not while a farm job is planned), NPC duels for XP, retries/backoff, spend cap. |
+| `src/game/special-jobs.ts`                               | 24 h disk cache of map-discovered silver/gold positions and their raw `job/job` replies.                                                                                                                                     |
+| `src/game/autopilot-quests.ts`                           | `QuestModule`: finish (reward by priority), wear + restore gear, buy quest items, pick up market goods, accept saloon quests, re-read quests waiting for a time window. `chooseReward`.                                      |
+| `src/game/quest-buy.ts`                                  | Buying quest items no job drops: `chooseBuys` (pure: source per item within the limits), `BuyCatalog` (shops, mobile trader, market offers the runner read; `state.buyCatalog`).                                             |
+| `src/game/debug-log.ts`, `src/tui/debug.ts`              | Debug log (`state.debug`) and its screen (`g x`); see "Debugging".                                                                                                                                                           |
+| `src/tui/autopilot.ts`                                   | Screen: priority, module toggles and values on the left, plan pane (`PlanPane`, rows from `planRows`) on the right; `Q` full queue view.                                                                                     |
+| `test/quest-buy.test.ts`                                 | Buying quest items: ~120 hand-reasoned cases (parsing, source choice, catalog, planner trips, state, buying against a fake server).                                                                                          |
+| `test/autopilot.test.ts`, `test/social.test.ts` (runner) | Timeline, config, planner, consumables, inserts, screen, queue view, rewards, duels; runner against a fake server.                                                                                                           |
 
 ## Using it
 
 - `g a` opens the screen. `R` run/pause (paused still plans and shows "would do", sends nothing), `X` stop
   (pause + clear the plan; rules stay), `Space`/`Enter` toggle, `←→`/`+-` values, `J K` reorder priority.
+- **Farm** (off): `Farm selected jobs` toggles it; `Space` on the `farm jobs` row opens the picker. There `/`
+  filters by job or product name, `Space` adds/removes in round-robin order, `J K` moves the selected job,
+  `P` loads the eight blacksmith-product jobs, `Esc` closes. The floor (50 %) and the motivation-item toggle
+  sit under the module. See "Products farm" below.
 - `use discovered silver & gold jobs` (off): plan specials the map has found at their exact location, with the
   real `job/job` values. It does not scan the map itself; see "Silver/gold jobs".
 - `switch spot only when better by` (20 %): stay at the queue-end location unless a job elsewhere scores clearly
@@ -43,7 +48,8 @@ screen (`g a`). Spec agreed with the user in a grill session ("Decisions").
   shares it, e.g. walk + deposit). Back-to-back runs of one job merge (`×3`); energy waits ≥ 1 min are their own
   `◷` rows.
 - Reasons (`PlannedTask.why`): jobs say the goal that gave most of the score (`Candidate.by`): `quest: Cotton for
-  "Farmer's woes" (3 left)` (left = before this run) or `best XP per energy · also <quest part>`. Sleeps: `energy low
+  "Farmer's woes" (3 left)` (left = before this run) or `best XP per energy · also <quest part>`. Farm jobs say
+  `farm: Wood · motivation 75%`; a motivation item says which job hit the floor. Sleeps: `energy low
   (8): sleep until …`; bank: `cash $X is over $Y: banking it`. Home shows the next task's title with its reason.
 - Header shows `autopilot ●` while running. Resumes on launch if it was running (after startup + first replan).
 
@@ -75,8 +81,8 @@ screen (`g a`). Spec agreed with the user in a grill session ("Decisions").
   count toward needs; queued sleeps keep their room rates in `state.sleepRates`), jobs and locations (drops
   blended with calibration), quest needs (`state.autopilotNeeds()`, below), hotels (home + nearest town, every
   10 min, energy rate × calibrated room scale), named towns, bag consumables above the reserve, budget left
-  today, failing step keys, calibrated HP scale, and (when the toggle is on) discovered silver/gold jobs with
-  their real `job/job` values.
+  today, failing step keys, calibrated HP scale, the farm selection/floor/settings, and (when the toggle is on)
+  discovered silver/gold jobs with their real `job/job` values.
 - **Position first**: the plan starts from `state.queueEnd`. When that is unknown (`Character.init.pos`/task
   coords were `(0,0)` and no live update or queued task has supplied a position yet), the runner does not
   replan or act and the pane says "waiting for the character position…". `(0,0)` is never used as the map
@@ -94,7 +100,7 @@ screen (`g a`). Spec agreed with the user in a grill session ("Decisions").
   runs cover the same time and compare: HP under `sleepBelow` → health item that lifts it over, else HP sleep
   (wake ≥ `wakeAbove`) · cash over `bank.above` → walk + deposit (own town within `ownTownWithin`, else nearest
   within `maxDetour`, else checked again after each step, so it banks when the route comes near a town) · your
-  inserts at their time · quest shopping trip (below) · best job.
+  inserts at their time · quest shopping trip (below) · next farm job, else best job by goal.
 - **Bank walk is sticky**: the deposit is an on-the-spot action, so only the walk goes into the server queue. The
   runner records that walk (`bankWalk` in `autopilot.json`, kept across restarts) and passes its town as
   `bankTownId`. While the queue ends there, the deposit comes first whatever the cash projection says, so no job
@@ -124,13 +130,15 @@ screen (`g a`). Spec agreed with the user in a grill session ("Decisions").
   plan, and adds the on-the-spot `buy` action (cash − cost in the timeline). A trip further away is tried again
   after each later step. Trips earn no plan value, so cancel-for-better never cancels jobs to go shopping; the
   trip goes in when the queue runs out.
-- **Job score**: five separate goals, each gain per cost, divided by the goal's **exchange rate** and weighted by
-  rank (1, 0.25, 0.06, 0.015, 0.004) or custom weights:
+- **Job score**: four separate goals, each gain per cost, divided by the goal's **exchange rate** and weighted by
+  rank (1, 0.25, 0.06, 0.015) or custom weights:
   - **Quests**: weighted progress toward open quests.
   - **XP**: job XP plus the quests' XP rewards this progress earns.
   - **Money**: job cash plus the quests' money rewards.
-  - **Products**: expected listed job drops × item sell price.
   - **Lucky finds**: luck chance × max find value (`minMaxItemVal[1]`), faded by planned motivation.
+
+  Product drops are not a goal and are not valued by shop price. Use the Farm module (below) to harvest a
+  chosen set of products.
 
   Exchange rates = best gain per cost per goal from where the server queue ends, fixed for the whole plan
   (`plan.rates`) and passed to the cancel check's alternatives, so values compare and the last crumbs of a need
@@ -182,6 +190,36 @@ screen (`g a`). Spec agreed with the user in a grill session ("Decisions").
   walks 19 min less → Prospecting and the second walk are cancelled. Manual town construction tasks
   (`type: 'build'`) are never cancelled.
 
+## Products farm
+
+The **Farm** module (off by default) queues a chosen set of jobs round-robin instead of the best job by goal.
+It is for crafting materials and does not use shop sell price at all.
+
+- **Selection**: `config.farm.jobs` is an ordered list of job ids; the picker on `g a` edits it. `P` loads the
+  blacksmith preset from `src/game/farm.ts`: Granite mining (25), Repair fences (23), Iron mining (85),
+  Clearing the forest (55), Picking cotton (5), Tending sheep (10), Tanning deer skin (17), Coal mining (40) —
+  one job per product, in the order in `docs/farming.md`. Jobs that are not doable, excluded or have no drops
+  are skipped, as are runs that could take HP under the sleep threshold; discovered silver/gold variants of a
+  selected job are used when `use discovered silver & gold jobs` is on and they drop more.
+- **Round-robin**: among eligible selected jobs it picks the one with the fewest runs already queued or planned,
+  ties by list order. A replan therefore continues the cycle instead of restarting it, and every product gets
+  its share.
+- **Duration**: per job, the duration with the most expected drop units per energy (long runs in practice;
+  short runs are slightly better per hour but cost far more energy).
+- **Floor** (`farm.floor`, default 50 %, 0 disables): projected motivation is `job.motivation − drops already
+  queued/planned`. At or below the floor the next job in the cycle uses one motivation item (if
+  `use motivation items at the floor` is on), then the plan is rebuilt. At most one item per plan because
+  whether it raises one job or all is unverified. With no item, that job is hidden from the farm **and from the
+  normal score for the rest of this plan**; the other selected jobs continue. When none is left the normal
+  priority takes over. A replan (after an item, a level-up, a job ending or the bag changing) tries again.
+- **Cancelling**: while a farm job is in the plan, cancel-for-better is skipped: the farm is a hard selection,
+  not a value to trade for XP. When all selected jobs are out, normal cancelling resumes.
+- **Motivation does not affect drop volume**: products drop the same at 100 % and 0 %. The floor protects XP,
+  cash and luck only. For pure harvesting set the floor to 0 and leave motivation items off; verify live that a
+  job can still be started at exactly 0 % (the planner assumes it can).
+- Multiple accounts need no coordination: each `TW_CLI_HOME` instance has its own list and settings. The farm
+  runs even with `Queue jobs` off (the two toggles are independent).
+
 ## Silver/gold jobs
 
 The map screen's normal 5×5 tile load discovers silver/gold job positions (`TileCache.specialJobs`); there is
@@ -200,7 +238,8 @@ or another detail request; entries older than a day, or no longer in a refreshed
 ## Scenarios (`test/scenarios.test.ts`)
 
 About 100 small situations (timeline, job choice, energy, wake targets, HP, bank, quests, motivation, inserts,
-the server queue, cancelling), each with the result a good player would want, reasoned out by hand in its
+the farm round-robin/floor/items/fallback, the server queue, cancelling), each with the result a good player
+would want, reasoned out by hand in its
 comment. Never fill an expectation in from what the planner returns: when one fails, decide whether the
 planner or the expectation is wrong. Add a scenario for every planner bug found live. Buying quest items has its own set in `test/quest-buy.test.ts`
 (same rule; its cases B8, B18, B19, B24, B25, S16, S19–S21 each fixed a flaw found while reasoning them out).
@@ -246,6 +285,7 @@ town you stand in, use an item, buy quest items).
 | Module                                                                                                            | Status                                                                                    |
 | ----------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
 | Queue jobs, priority, look-ahead                                                                                  | built                                                                                     |
+| Products farm (selected jobs, round-robin, floor, items, blacksmith preset)                                       | built; best duration per energy, floor per job, normal priority after it                  |
 | Silver / gold jobs discovered on the map                                                                          | built; toggle off by default, real `job/job` values, no scanning (see "Silver/gold jobs") |
 | Energy sleep + wake rules + auto-cancel                                                                           | built (room rate units unverified)                                                        |
 | HP (sleep / item / skip risky jobs)                                                                               | built (danger → HP is a heuristic)                                                        |
@@ -274,9 +314,10 @@ energy items: smallest that covers the next run and the level-up need, wait up t
 largest first when none covers the whole level-up need, and a farther level-up uses the item even when each
 single wait is short · queue slots cost 10 min (the TUI is not open 24/7) · calibrate drops, HP, rooms from your
 own game · silver/gold jobs only when discovered by the normal map tile loads, real `job/job` values, toggle off
-by default, no scan ·
-goals stay separate: Money = cash pay, Products = listed item drops at sell price, Lucky finds = luck chance × max
-find value, none folded into another.
+by default, no scan · products are farmed by the Farm module: selected jobs in round-robin order, best duration
+per energy, 50 % floor with motivation items at most once per plan, below-floor jobs hidden from the normal score
+for the rest of the plan, then the normal priority; no sell-price product goal ·
+goals stay separate: Money = cash pay, Lucky finds = luck chance × max find value, none folded into another.
 
 ## Unverified (check live, then move to docs/game-mechanics.md)
 
@@ -290,3 +331,6 @@ find value, none folded into another.
 - A market instant buy works from anywhere and the goods wait in the offer's town (`fetch` there).
 - A time-window requirement turns solved inside the window (the quest module re-reads the log every 10 min).
 - Mobile trader offers carry full item ids (base × 1000, like the bag) and can be bought `limited_count` times.
+- Whether a “Work motivation increase” item raises one job or all jobs. Until known, the farm uses at most one
+  per plan and updates only the job it is used for.
+- Whether a job can be started at exactly 0 % motivation. The planner assumes yes; the 50 % farm floor avoids it.

@@ -123,17 +123,20 @@ test('autopilot file: defaults, merge of saved values, ranking repaired, bad inp
       running: true,
       priority: ['xp', 'bogus', 'money'],
       hp: { sleepBelow: 0.4, wakeAbove: 'x' },
-      modules: { quests: true },
+      modules: { quests: true, farm: true },
+      farm: { jobs: [5, 'x', 5, -1, 10.5, 25], floor: 5 },
       unknown: 1,
     },
     rules: { excludedJobs: [5] },
     plan: { fingerprint: 'abc', savedAt: 7, tasks: [] },
   });
   assert.equal(autopilotFile.config.running, true);
-  assert.deepEqual(autopilotFile.config.priority, ['xp', 'money', 'quests', 'products', 'luck']);
+  assert.deepEqual(autopilotFile.config.priority, ['xp', 'money', 'quests', 'luck']);
   assert.deepEqual(autopilotFile.config.hp, { sleepBelow: 0.4, wakeAbove: 0.7 }, 'wrong types keep the default');
   assert.equal(autopilotFile.config.modules.quests, true);
   assert.equal(autopilotFile.config.modules.jobs, true, 'unsaved keys keep the default');
+  assert.equal(autopilotFile.config.modules.farm, true);
+  assert.deepEqual(autopilotFile.config.farm, { jobs: [5, 25], floor: 1, items: true });
   assert.equal('unknown' in autopilotFile.config, false);
   assert.deepEqual(autopilotFile.rules.excludedJobs, [5]);
   assert.equal(autopilotFile.plan?.fingerprint, 'abc');
@@ -141,14 +144,12 @@ test('autopilot file: defaults, merge of saved values, ranking repaired, bad inp
     xp: 1,
     money: 0.25,
     quests: 0.06,
-    products: 0.015,
-    luck: 0.004,
+    luck: 0.015,
   });
   assert.deepEqual(goalWeights({ ...autopilotFile.config, customWeights: { xp: 60, money: -1 } }), {
     quests: 0,
     xp: 60,
     money: 0,
-    products: 0,
     luck: 0,
   });
   assert.equal(
@@ -200,6 +201,14 @@ test('autopilot screen: toggles, values and ranking change the saved config; que
     clock,
     character,
     travelSpeed: 1,
+    queue: [] as any[],
+    jobs: [planJob(5, 5, { xp: 10, money: 0 }), planJob(25, 25, { xp: 20, money: 0 })],
+    jobOptions: () => [
+      { job: planJob(5, 5, { xp: 10, money: 0 }), at: { x: 0, y: 0 }, way: 0 },
+      { job: planJob(25, 25, { xp: 20, money: 0 }), at: { x: 0, y: 0 }, way: 0 },
+    ],
+    jobValues: (option: any) => option.job.values,
+    jobProducts: () => [{ itemId: 704, name: 'Cotton', percent: 100 }],
     logs: [] as string[],
     runner: { plan: null },
     info(message: string) {
@@ -251,14 +260,14 @@ test('autopilot screen: toggles, values and ranking change the saved config; que
     await settle();
     assert.match(plain(), /‖ paused/);
     assert.match(plain(), /1 Quests completed/);
-    assert.match(plain(), /5 Lucky finds \(chance × max\)/);
+    assert.match(plain(), /4 Lucky finds \(chance × max\)/);
     assert.match(plain(), /Cutting tobacco/);
     assert.match(plain(), /\+45 XP/);
     assert.match(plain(), /In the queue/);
-    assert.match(plain(), /Goals {2}Quests › XP › Money › Products › Luck/);
+    assert.match(plain(), /Goals {2}Quests › XP › Money › Luck/);
     await keys('J'); // quests down one rank
-    assert.deepEqual(state.autopilot.config.priority, ['xp', 'quests', 'money', 'products', 'luck']);
-    await keys('j', 'j', 'j', 'j', 'j', ' '); // the "Queue jobs" toggle
+    assert.deepEqual(state.autopilot.config.priority, ['xp', 'quests', 'money', 'luck']);
+    await keys('j', 'j', 'j', 'j', ' '); // the "Queue jobs" toggle
     assert.equal(state.autopilot.config.modules.jobs, false);
     await keys('R');
     assert.equal(state.autopilot.config.running, true);
@@ -266,11 +275,26 @@ test('autopilot screen: toggles, values and ranking change the saved config; que
     await settle();
     assert.match(plain(), /● running/);
     // Down to "below" (HP sleep threshold) and raise it by 5 %.
-    for (let index = 0; index < 10; index++) {
+    for (let index = 0; index < 14; index++) {
       await keys('j');
     }
     await keys('+');
     assert.equal(state.autopilot.config.hp.sleepBelow, 0.55);
+    // Farm job picker: open, select one, load the blacksmith preset, close.
+    for (let index = 0; index < 10; index++) {
+      await keys('k');
+    }
+    await keys(' ');
+    assert.match(plain(), /Farm jobs {2}0 selected/);
+    await keys(' ');
+    assert.deepEqual(state.autopilot.config.farm.jobs, [5]);
+    await keys('P');
+    app.rerender(el());
+    await settle();
+    assert.equal(state.autopilot.config.farm.jobs.length, 8);
+    assert.equal(state.autopilot.config.modules.farm, true);
+    assert.match(plain(), /Farm jobs {2}8 selected/);
+    await keys('\x1b');
     await keys('X');
     assert.equal(state.autopilot.config.running, false);
     assert.match(state.logs.at(-1), /stopped/);
@@ -335,7 +359,6 @@ async function planWith(
     config: autopilotFile.config,
     rules: autopilotFile.rules,
     needs: transform.needs ?? [],
-    itemValue: () => 5,
     hotels: transform.hotels ?? [],
     consumables: transform.consumables ?? [],
     homeTownId: 9,
@@ -348,12 +371,12 @@ async function planWith(
 
 test('planner: the top goal decides the job; per hour vs per energy', async () => {
   const xp = await planWith({
-    config: (candidate) => (candidate.priority = ['xp', 'money', 'quests', 'products', 'luck']),
+    config: (candidate) => (candidate.priority = ['xp', 'money', 'quests', 'luck']),
   });
   assert.equal((xp.tasks[0]!.step as any).jobId, 1);
   assert.match(xp.why, /best XP per energy/);
   const money = await planWith({
-    config: (candidate) => (candidate.priority = ['money', 'xp', 'quests', 'products', 'luck']),
+    config: (candidate) => (candidate.priority = ['money', 'xp', 'quests', 'luck']),
   });
   assert.equal((money.tasks[0]!.step as any).jobId, 2);
   assert.ok(money.value > 0);
@@ -438,7 +461,7 @@ test('planner: quest needs come first with Quests on top; dangerous jobs are ski
   const safe = await planWith({
     jobs: risky,
     start: { health: 270 },
-    config: (candidate) => (candidate.priority = ['xp', 'money', 'quests', 'products', 'luck']),
+    config: (candidate) => (candidate.priority = ['xp', 'money', 'quests', 'luck']),
   });
   assert.equal((safe.tasks[0]!.step as any).jobId, 2, '1000 XP job could take HP (270/500) under 50 %');
 });
@@ -493,7 +516,7 @@ test('planner: sleeps only for the next run when that run levels up (not until f
     jobs,
     hotels,
     start: { energy: 2, experience: levelStartXp(11) - 50 },
-    config: (candidate) => (candidate.priority = ['money', 'xp', 'quests', 'products', 'luck']),
+    config: (candidate) => (candidate.priority = ['money', 'xp', 'quests', 'luck']),
   });
   const sl = pick.tasks[0]!;
   assert.equal(sl.step.kind, 'sleep');
@@ -533,7 +556,6 @@ test('planner: queued jobs are scored like planned ones; walking inside the hori
       config: autopilotFile.config,
       rules: autopilotFile.rules,
       needs: [],
-      itemValue: () => 0,
       hotels: [],
       towns: [],
       budget: 1000,
@@ -599,7 +621,6 @@ test('planner: a queued bank walk gets its deposit first even when the cash proj
       config: autopilotFile.config,
       rules: autopilotFile.rules,
       needs: [],
-      itemValue: () => 0,
       hotels: [],
       homeTownId: 9,
       towns,
@@ -695,7 +716,6 @@ test('planner: plans to the 6 h horizon (jobs of any length cover the same time)
     config: autopilotFile.config,
     rules,
     needs: [],
-    itemValue: () => 0,
     hotels,
     towns: [],
     budget: 1000,
@@ -731,6 +751,8 @@ test('queue view (Q): queued + planned rows; d excludes a planned job, s inserts
     autopilot: parseAutopilotFile(null),
     clock,
     character: { cash: 0 },
+    queue: [] as any[],
+    jobs: [] as any[],
     logs: [] as string[],
     runner: {
       plan: {
@@ -838,11 +860,22 @@ test('quest rewards: picked by priority; a wearable upgrade always wins', async 
     { id: 2, text: '300 Dollars' },
     { id: 3, text: 'Bowie knife' },
   ];
-  assert.equal(chooseReward(opts, { ...config, priority: ['xp', 'money', 'quests', 'products', 'luck'] }), 1);
-  assert.equal(chooseReward(opts, { ...config, priority: ['money', 'xp', 'quests', 'products', 'luck'] }), 2);
+  assert.equal(chooseReward(opts, { ...config, priority: ['xp', 'money', 'quests', 'luck'] }), 1);
+  assert.equal(chooseReward(opts, { ...config, priority: ['money', 'xp', 'quests', 'luck'] }), 2);
   assert.equal(
     chooseReward(opts, config, (text) => text === 'Bowie knife'),
     3,
+  );
+  assert.equal(
+    chooseReward(
+      [
+        { id: 3, text: 'Bowie knife' },
+        { id: 1, text: '500 Experience points' },
+      ],
+      config,
+    ),
+    1,
+    'a plain item reward loses to XP',
   );
   assert.equal(chooseReward([{ id: 9, text: 'x' }], config), 9);
 });
@@ -871,7 +904,7 @@ test("planner: a level-up refunds energy, so XP lowers a run's energy cost (refi
   const jobs = [planJob(1, 1, { xp: 300, money: 100 }), planJob(2, 2, { xp: 0, money: 110 })];
   const pick = await planWith({
     jobs,
-    config: (candidate) => (candidate.priority = ['money', 'xp', 'quests', 'products', 'luck']),
+    config: (candidate) => (candidate.priority = ['money', 'xp', 'quests', 'luck']),
   });
   assert.equal((pick.tasks[0]!.step as any).jobId, 1, '$100 for ~3 net energy beats $110 for 12');
 });
@@ -919,7 +952,6 @@ test('planner: drops of jobs already queued count toward needs', async () => {
     config: autopilotFile.config,
     rules: autopilotFile.rules,
     needs,
-    itemValue: () => 0,
     hotels: [],
     towns: [],
     budget: 1000,
@@ -937,7 +969,7 @@ test('planner: a queue slot costs time (the TUI is not always open), so runs tha
     },
   };
   const money = (slot: number) => (candidate: any) => {
-    candidate.priority = ['money', 'xp', 'quests', 'products', 'luck'];
+    candidate.priority = ['money', 'xp', 'quests', 'luck'];
     candidate.per = 'time';
     candidate.slotCost = slot;
   };

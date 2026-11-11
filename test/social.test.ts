@@ -2147,7 +2147,7 @@ test('autopilot runner: queues what the energy covers, sleeps when out, wakes at
   ];
   gameState.updateAutopilot((autopilotFile) => {
     autopilotFile.config.running = true;
-    autopilotFile.config.priority = ['xp', 'money', 'quests', 'products', 'luck'];
+    autopilotFile.config.priority = ['xp', 'money', 'quests', 'luck'];
   });
 
   // 40 energy: three 12-energy runs fit.

@@ -532,7 +532,6 @@ function plan(
     config,
     rules: { ...structuredClone(EMPTY_RULES), ...options.rules },
     needs: [],
-    itemValue: () => 0,
     hotels: options.hotels ?? [],
     consumables: [],
     homeTownId: options.homeTownId ?? 9,

@@ -52,7 +52,9 @@ browser client's code; **unverified** = assumed, check live and update this file
   XP, cash and product drop rate by 50 %, gold by 100 % (official support/wiki). The real boosted values are in
   `job/job` for that location, not in the tile data; its `durations[]` has the same shape as `work/index`.
   Silver jobs reset daily between 03:00 and 04:00, gold ones last until used up.
-- Item drops: expected items per run = `(prop + probBonus) / 100`.
+- Item drops: expected items per run = `(prop + probBonus) / 100`. `work/index` lists a different prop per duration;
+  long runs list proportionally more, so per energy long runs are far better (e.g. Clearing the forest: 6.75 wood
+  per 1 h, 1.13 per 10 min, 0.03 per 15 s, all for 12 / 5 / 1 energy). Drop volume does not depend on motivation.
 - Lucky find: each run has a `luck` chance (0–1, from `work/index` / `job/job`) of an item worth `minMaxItemVal`
   `[$min, $max]`; the job window shows the range and the chance. The autopilot values it at chance × max.
 - Travel time: `distance · Game.travelSpeed · Character.speed` seconds.

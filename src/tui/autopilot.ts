@@ -2,9 +2,10 @@
 // autopilot is doing and the projected queue (timeline) on the right. Settings save on every change.
 
 import { Box, Text, useInput } from 'ink';
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import type { AutopilotConfig, Goal, ModuleKey, PlannedTask } from '../game/autopilot-config.ts';
-import type { GameState } from '../game/state.ts';
+import { BLACKSMITH_JOBS, farmProduct } from '../game/farm.ts';
+import type { GameState, JobOption } from '../game/state.ts';
 import type { ProjectedStep, Timeline } from '../game/timeline.ts';
 import { defined } from '../util/defined.ts';
 import type { ScreenProps } from './character.ts';
@@ -17,6 +18,7 @@ const SECONDS_PER_HOUR = 3_600;
 /** Modules that already act; the others are shown but do nothing yet. */
 export const BUILT_MODULES = new Set<ModuleKey>([
   'jobs',
+  'farm',
   'energySleep',
   'hpSleep',
   'bank',
@@ -29,7 +31,6 @@ const GOAL_LABEL: Record<Goal, string> = {
   quests: 'Quests completed',
   xp: 'Experience',
   money: 'Money (cash pay)',
-  products: 'Products (item drops to sell)',
   luck: 'Lucky finds (chance × max)',
 };
 
@@ -37,6 +38,7 @@ type Row =
   | { kind: 'head'; text: string }
   | { kind: 'goal'; rank: number }
   | { kind: 'scope' }
+  | { kind: 'farmJobs' }
   | {
       kind: 'toggle';
       label: string;
@@ -103,7 +105,6 @@ export const ROWS: [Row, ...Row[]] = [
   { kind: 'goal', rank: 1 },
   { kind: 'goal', rank: 2 },
   { kind: 'goal', rank: 3 },
-  { kind: 'goal', rank: 4 },
   { kind: 'head', text: 'Modules (Space toggles · ← → change values)' },
   {
     kind: 'toggle',
@@ -122,6 +123,10 @@ export const ROWS: [Row, ...Row[]] = [
     0.5,
     percent,
   ),
+  moduleToggle('farm', 'Farm selected jobs (round-robin)'),
+  { kind: 'farmJobs' },
+  numberSetting((configValue) => configValue.farm, 'floor', 'stop farming below motivation', 0.05, 0, 1, percent),
+  subToggle((configValue) => configValue.farm, 'items', 'use motivation items at the floor'),
   moduleToggle('energySleep', 'Sleep when out of energy'),
   subToggle((configValue) => configValue.wake, 'levelUp', 'wake: enough to level up'),
   subToggle((configValue) => configValue.wake, 'stretch', 'wake: enough for the next stretch'),
@@ -223,6 +228,10 @@ const selectable = (result: Row | undefined) => !!result && result.kind !== 'hea
 export function AutopilotScreen({ state, width, height, onCapture, onExit, active = true }: ScreenProps) {
   const [selected, setSelected] = useState(1);
   const [expanded, setExpanded] = useState(false);
+  const [picking, setPicking] = useState(false);
+  const [pickFilter, setPickFilter] = useState('');
+  const [pickFiltering, setPickFiltering] = useState(false);
+  const [pickSelected, setPickSelected] = useState(0);
   const config = state.autopilot.config;
   const index = selectable(ROWS[selected]) ? selected : 1;
   const current = ROWS[index] ?? ROWS[0];
@@ -235,9 +244,116 @@ export function AutopilotScreen({ state, width, height, onCapture, onExit, activ
   };
   const edit = (fn: (configValue: AutopilotConfig) => void) =>
     state.updateAutopilot((autopilotFile) => fn(autopilotFile.config));
+  // The picker is one line per job even when a discovered special adds a second location for it.
+  const pickOptions = useMemo(() => {
+    if (!picking) {
+      return [];
+    }
+    const seen = new Set<number>();
+    return state.jobOptions(pickFilter, { sort: 'name', showAll: true }).filter((option) => {
+      if (seen.has(option.job.id)) {
+        return false;
+      }
+      seen.add(option.job.id);
+      return true;
+    });
+  }, [
+    state,
+    picking,
+    pickFilter,
+    state.jobsVersion,
+    state.specialVersion,
+    state.items,
+    state.queue.length,
+    state.queueEnd?.x,
+    state.queueEnd?.y,
+  ]);
+  const pickIndex = Math.max(0, Math.min(pickSelected, pickOptions.length - 1));
+  const toggleFarmJob = (jobId: number) =>
+    edit((configValue) => {
+      const at = configValue.farm.jobs.indexOf(jobId);
+      if (at >= 0) {
+        configValue.farm.jobs.splice(at, 1);
+      } else {
+        configValue.farm.jobs.push(jobId);
+      }
+    });
+  const moveFarmJob = (jobId: number, direction: 1 | -1) =>
+    edit((configValue) => {
+      const at = configValue.farm.jobs.indexOf(jobId);
+      const to = at + direction;
+      if (at < 0 || to < 0 || to >= configValue.farm.jobs.length) {
+        return;
+      }
+      const [moved] = configValue.farm.jobs.splice(at, 1);
+      if (moved !== undefined) {
+        configValue.farm.jobs.splice(to, 0, moved);
+      }
+    });
+  const loadBlacksmithPreset = () => {
+    edit((configValue) => {
+      configValue.farm.jobs = [...BLACKSMITH_JOBS];
+      configValue.modules.farm = true;
+    });
+    state.info(`Blacksmith farm preset loaded: ${BLACKSMITH_JOBS.length} jobs.`);
+  };
+  useEffect(() => {
+    if (!picking) {
+      return;
+    }
+    onCapture(true);
+    return () => onCapture(false);
+  }, [picking, onCapture]);
 
   useInput(
     (input, key) => {
+      if (picking) {
+        if (pickFiltering) {
+          if (key.return || key.escape) {
+            setPickFiltering(false);
+            if (key.escape) {
+              setPickFilter('');
+            }
+            setPickSelected(0);
+          } else if (key.backspace || key.delete) {
+            setPickFilter((text) => text.slice(0, -1));
+            setPickSelected(0);
+          } else if (input && !key.ctrl && !key.meta && !key.return) {
+            setPickFilter((text) => text + input);
+            setPickSelected(0);
+          }
+          return;
+        }
+        if (key.escape) {
+          return setPicking(false);
+        }
+        if (input === '/') {
+          return setPickFiltering(true);
+        }
+        if (key.upArrow || input === 'k') {
+          return setPickSelected(Math.max(0, pickIndex - 1));
+        }
+        if (key.downArrow || input === 'j') {
+          return setPickSelected(Math.max(0, Math.min(pickOptions.length - 1, pickIndex + 1)));
+        }
+        if (key.pageUp) {
+          return setPickSelected(Math.max(0, pickIndex - 10));
+        }
+        if (key.pageDown) {
+          return setPickSelected(Math.max(0, Math.min(pickOptions.length - 1, pickIndex + 10)));
+        }
+        const option = pickOptions[pickIndex];
+        if (option && (input === ' ' || key.return)) {
+          return toggleFarmJob(option.job.id);
+        }
+        if (input === 'P') {
+          return loadBlacksmithPreset();
+        }
+        if (option && (input === 'J' || input === 'K')) {
+          return moveFarmJob(option.job.id, input === 'J' ? 1 : -1);
+        }
+        return;
+      }
       if (input === 'Q') {
         return setExpanded(true);
       }
@@ -281,6 +397,13 @@ export function AutopilotScreen({ state, width, height, onCapture, onExit, activ
       if (current.kind === 'scope' && (input === ' ' || key.return)) {
         return state.updateAutopilot((autopilotFile) => (autopilotFile.rules.onlyQuests = []));
       }
+      if (current.kind === 'farmJobs' && (input === ' ' || key.return)) {
+        setPicking(true);
+        setPickFilter('');
+        setPickFiltering(false);
+        setPickSelected(0);
+        return;
+      }
       if (current.kind === 'toggle' && (input === ' ' || key.return)) {
         return edit((configValue) => current.set(configValue, !current.get(configValue)));
       }
@@ -296,6 +419,19 @@ export function AutopilotScreen({ state, width, height, onCapture, onExit, activ
     },
     { isActive: active && !expanded },
   );
+
+  if (picking) {
+    return createElement(FarmPicker, {
+      state,
+      width,
+      height,
+      options: pickOptions,
+      selected: pickIndex,
+      filter: pickFilter,
+      filtering: pickFiltering,
+      farmJobs: config.farm.jobs,
+    });
+  }
 
   if (expanded) {
     return createElement(QueueView, { state, width, height, active, onCapture, onClose: () => setExpanded(false) });
@@ -329,6 +465,18 @@ export function AutopilotScreen({ state, width, height, onCapture, onExit, activ
           `     Quests goal: ${count ? `only the route's ${count} quest(s) (Space: all)` : 'all open quests'}`,
         );
       }
+      if (result.kind === 'farmJobs') {
+        const jobs = config.farm.jobs;
+        const names = jobs
+          .slice(0, 4)
+          .map((jobId) => farmProduct(jobId)?.name ?? state.jobs.find((job) => job.id === jobId)?.name ?? `#${jobId}`)
+          .join(', ');
+        return createElement(
+          Text,
+          { key: countValue, inverse: inv, wrap: 'truncate' },
+          `     farm jobs: ${jobs.length ? `${jobs.length} selected (${names}${jobs.length > 4 ? '…' : ''})` : 'none'} · Space to choose`,
+        );
+      }
       if (result.kind === 'goal') {
         const priority = config.priority[result.rank];
         return createElement(
@@ -357,6 +505,62 @@ export function AutopilotScreen({ state, width, height, onCapture, onExit, activ
     }),
   );
   return createElement(Box, { width, height }, left, createElement(PlanPane, { state, width: rightW, height }));
+}
+
+/** Full-screen job picker for the farm list: one row per job, selection order shown, product names for filtering. */
+function FarmPicker(props: {
+  state: GameState;
+  width: number;
+  height: number;
+  options: JobOption[];
+  selected: number;
+  filter: string;
+  filtering: boolean;
+  farmJobs: number[];
+}) {
+  const { state, width, height, options, selected, filter, filtering, farmJobs } = props;
+  const [start, end] = scrollWindow(selected, options.length, Math.max(3, height - 4));
+  const title = filtering ? `Farm jobs  /${filter}▏` : filter ? `Farm jobs  (filter: ${filter})` : 'Farm jobs';
+  const productWidth = Math.max(12, Math.floor(width * 0.35));
+  const nameWidth = Math.max(8, width - productWidth - 20);
+  return createElement(
+    Box,
+    { flexDirection: 'column', borderStyle: 'round', borderColor: 'cyan', width, height, paddingX: 1 },
+    createElement(Text, { bold: true, wrap: 'truncate' }, `${title}  ${farmJobs.length} selected`),
+    createElement(
+      Text,
+      { dimColor: true, wrap: 'truncate' },
+      'Space select · J K reorder · P blacksmith preset · / filter · Esc back',
+    ),
+    ...options.slice(start, end).map((option, offset) => {
+      const optionIndex = start + offset;
+      const selectedRow = optionIndex === selected;
+      const order = farmJobs.indexOf(option.job.id);
+      const products = state
+        .jobProducts(option.job, state.jobValues(option))
+        .map((product) => product.name)
+        .join(', ');
+      const doable = option.job.jobPoints >= option.job.workPoints;
+      return createElement(
+        Text,
+        defined({
+          key: `${option.job.id}:${option.at?.x ?? 0},${option.at?.y ?? 0}`,
+          inverse: selectedRow,
+          color: order >= 0 ? 'green' : doable ? undefined : 'gray',
+          wrap: 'truncate',
+        }),
+        `${order >= 0 ? `[${order + 1}]` : '[ ]'} `,
+        truncate(option.job.name, nameWidth).padEnd(nameWidth),
+        ` ${truncate(products || '—', productWidth).padEnd(productWidth)}`,
+        ` LP ${option.job.laborPoints}`.padStart(7),
+        ` lvl ${option.job.level}`.padStart(7),
+        option.special ? ` · ${option.special}` : '',
+      );
+    }),
+    options.length === 0
+      ? createElement(Text, { dimColor: true }, state.jobs.length ? 'No job matches the filter.' : 'Loading jobs…')
+      : null,
+  );
 }
 
 /** One line of the plan pane: a step, back-to-back runs of one job merged, or a wait for energy. */
@@ -443,7 +647,6 @@ const GOAL_SHORT: Record<Goal, string> = {
   quests: 'Quests',
   xp: 'XP',
   money: 'Money',
-  products: 'Products',
   luck: 'Luck',
 };
 

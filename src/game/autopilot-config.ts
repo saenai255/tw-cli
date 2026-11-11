@@ -10,12 +10,30 @@ import { arr, isObj, mergeDefaults, obj, objs } from '../util/json.ts';
 import type { Quest } from './quests.ts';
 import type { TimelineStep } from './timeline.ts';
 
-export type Goal = 'quests' | 'xp' | 'money' | 'products' | 'luck';
-export const GOALS: Goal[] = ['quests', 'xp', 'money', 'products', 'luck'];
+export type Goal = 'quests' | 'xp' | 'money' | 'luck';
+export const GOALS: Goal[] = ['quests', 'xp', 'money', 'luck'];
 /** Weights by rank: the top goal decides, the rest break ties. */
-export const RANK_WEIGHTS = [1, 0.25, 0.06, 0.015, 0.004];
+export const RANK_WEIGHTS = [1, 0.25, 0.06, 0.015];
 
-export type ModuleKey = 'jobs' | 'energySleep' | 'hpSleep' | 'consumables' | 'bank' | 'quests' | 'npcDuels' | 'dryRun';
+export type ModuleKey =
+  | 'jobs'
+  | 'farm'
+  | 'energySleep'
+  | 'hpSleep'
+  | 'consumables'
+  | 'bank'
+  | 'quests'
+  | 'npcDuels'
+  | 'dryRun';
+
+export interface FarmConfig {
+  /** Job ids to farm round-robin, in order; the planner skips ones it cannot do. */
+  jobs: number[];
+  /** Stop a farm job at or below this motivation (0 = never stop). */
+  floor: number;
+  /** Use a motivation item when the next farm job reaches the floor. */
+  items: boolean;
+}
 
 export interface AutopilotConfig {
   running: boolean;
@@ -24,6 +42,8 @@ export interface AutopilotConfig {
   /** Replaces RANK_WEIGHTS when set (advanced). */
   customWeights: Partial<Record<Goal, number>> | null;
   modules: Record<ModuleKey, boolean>;
+  /** Selected jobs for the products farm; see docs/autopilot.md "Products farm". */
+  farm: FarmConfig;
   wake: { levelUp: boolean; stretch: boolean; hpSafe: boolean; full: boolean };
   hp: { sleepBelow: number; wakeAbove: number };
   /** Hotel and bank: own town when it is this close (s of walking). */
@@ -67,11 +87,12 @@ export interface AutopilotConfig {
 
 export const DEFAULT_CONFIG: AutopilotConfig = {
   running: false,
-  priority: ['quests', 'xp', 'money', 'products', 'luck'],
+  priority: ['quests', 'xp', 'money', 'luck'],
   per: 'energy',
   customWeights: null,
   modules: {
     jobs: true,
+    farm: false,
     energySleep: true,
     hpSleep: true,
     consumables: false,
@@ -80,6 +101,7 @@ export const DEFAULT_CONFIG: AutopilotConfig = {
     npcDuels: false,
     dryRun: false,
   },
+  farm: { jobs: [], floor: 0.5, items: true },
   wake: { levelUp: true, stretch: false, hpSafe: true, full: false },
   hp: { sleepBelow: 0.5, wakeAbove: 0.7 },
   ownTownWithin: 3600,
@@ -183,6 +205,12 @@ export function parseAutopilotFile(json: unknown): AutopilotFile {
   // The ranking must hold every goal once; drop unknowns, append missing ones.
   const ranked = arr(obj(raw.config).priority).filter((group): group is Goal => GOALS.some((goal) => goal === group));
   config.priority = [...new Set([...ranked, ...GOALS])];
+  // Farm job ids: positive integers, once each, in the saved order. Floor stays a fraction.
+  const farmJobs = arr(obj(obj(raw.config).farm).jobs)
+    .map(Number)
+    .filter((jobId) => Number.isInteger(jobId) && jobId > 0);
+  config.farm.jobs = [...new Set(farmJobs)];
+  config.farm.floor = Math.max(0, Math.min(1, config.farm.floor));
   const rules = mergeDefaults(EMPTY_RULES, raw.rules);
   const plan =
     isObj(raw.plan) && typeof raw.plan.fingerprint === 'string' && Array.isArray(raw.plan.tasks)
