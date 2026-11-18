@@ -9,8 +9,10 @@ import { randomBytes } from 'node:crypto';
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { dirname } from 'node:path';
-import { DEFAULT_WORLD, ensureGame } from '../auth/session.ts';
+import type { WorldConfig } from '../auth/login.ts';
+import { ensureGame, selectedWorld } from '../auth/session.ts';
 import { PROFILE_FILE } from '../auth/session-store.ts';
+import { NET_WORLDS, worldById, worldConfig } from '../auth/worlds.ts';
 import {
   type FingerprintProfile,
   FingerprintProfileError,
@@ -38,6 +40,7 @@ export interface WebOptions {
     name: string,
     password: string,
     profile: FingerprintProfile,
+    world: WorldConfig,
   ) => Promise<{ name: string; level: number; world: string }>;
 }
 
@@ -80,14 +83,27 @@ const TOKEN_BYTES = 18;
 /** Let the last HTTP response reach the browser before the process exits. */
 const EXIT_DELAY_MS = 300;
 
-async function defaultLogin(name: string, password: string, profile: FingerprintProfile) {
-  const game = await ensureGame({ forceLogin: true, profile, credentials: async () => ({ name, password }) });
+async function defaultLogin(name: string, password: string, profile: FingerprintProfile, world: WorldConfig) {
+  const game = await ensureGame({ world, forceLogin: true, profile, credentials: async () => ({ name, password }) });
   const character = game.bootstrap.character ?? {};
   return {
     name: String(character.name ?? '?'),
     level: Number(character.level ?? 0),
-    world: String(game.bootstrap.game?.currentWorldName ?? DEFAULT_WORLD.url),
+    world: String(game.bootstrap.game?.currentWorldName ?? world.name ?? world.url),
   };
+}
+
+/** Open worlds for the page's select; an env-configured world outside the list gets id 0. */
+function webWorlds(current: WorldConfig): { id: number; name: string; url: string }[] {
+  const worlds = NET_WORLDS.filter((world) => world.open).map((world) => ({
+    id: world.id,
+    name: world.name,
+    url: world.url,
+  }));
+  if (!worlds.some((world) => world.url === current.url)) {
+    worlds.unshift({ id: 0, name: current.name ?? new URL(current.url).host, url: current.url });
+  }
+  return worlds;
 }
 
 export function startWebServer(
@@ -121,11 +137,17 @@ export function startWebServer(
 
       if (req.method === 'GET' && url.pathname === '/') {
         const existing = readProfileRaw(profileFile);
+        const current = selectedWorld();
         return send(
           res,
           200,
           'text/html; charset=utf-8',
-          page({ token, world: DEFAULT_WORLD.url, existingFp: existing?.fp ?? null }),
+          page({
+            token,
+            worlds: webWorlds(current),
+            currentUrl: current.url,
+            existingFp: existing?.fp ?? null,
+          }),
         );
       }
       if (req.method === 'GET' && url.pathname === '/fingerprint2.js') {
@@ -174,9 +196,18 @@ export function startWebServer(
             error: `Save the fingerprint first (${entryValue instanceof Error ? entryValue.message : entryValue})`,
           });
         }
+        const posted = Number(body.world);
+        const chosen = Number.isInteger(posted) && posted > 0 ? worldById(posted) : undefined;
+        if (Number.isInteger(posted) && posted > 0 && !chosen) {
+          return json(res, 400, { error: `Unknown world ${posted}` });
+        }
+        if (chosen && !chosen.open) {
+          return json(res, 400, { error: `${chosen.name} is closed` });
+        }
+        const world = chosen ? worldConfig(chosen) : selectedWorld();
         loginRunning = true;
         try {
-          const who = await login(name, password, profile);
+          const who = await login(name, password, profile, world);
           log(`Logged in as ${who.name} (level ${who.level}) on ${who.world}. Session saved.`);
           json(res, 200, { ok: true, ...who });
           if (opts.exitAfterLogin) {

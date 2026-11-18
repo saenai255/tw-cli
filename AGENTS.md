@@ -56,7 +56,9 @@ the summary. Small gains compound; nobody needs to schedule a cleanup.
 - `src/util/`: `json.ts` (narrowing unknown JSON), `errors.ts` (`errorMessage` for a caught value), `defined.ts`
   (drop undefined props), disk cache, wake detection.
   `src/types/reset.d.ts`: lib typings that would hand out `any`.
-- `src/http/`, `src/auth/`, `src/fingerprint/`, `src/realtime/`: transport, login, fingerprint, chat long-poll.
+- `src/http/`, `src/auth/`, `src/fingerprint/`, `src/realtime/`: transport, login (the hardcoded `.net` world
+  list in `worlds.ts`, the picked world in `world.json`, cookies per world in `session.json`), fingerprint,
+  chat long-poll.
 - `test/`: node:test. `features`/`social`/`setup` tests set `TW_CLI_HOME` to a temp dir; new tests that write
   config must do the same (never write the user's real `~/.config/tw-cli`).
 
@@ -109,6 +111,9 @@ the summary. Small gains compound; nobody needs to schedule a cleanup.
   sell-price Products goal: product farming is the **Farm** module (selected jobs in round-robin, best duration
   per energy, a motivation floor with items, then the normal priority). Never fold luck into Money; farm
   products are their own module, not a goal.
+- The autopilot job duration is a setting (`jobs.duration`: auto / 15 s / 10 min / 1 h, auto by default). A
+  fixed value is a hard filter for normal, silver/gold and farm jobs; best-duration-per-energy applies only in
+  auto. Already queued runs of another duration finish (cancel with `c` in the queue view).
 - Farm products are counted, not valued by shop sell price. The blacksmith preset is the eight early blacksmith
   product jobs (`src/game/farm.ts`); the floor is per job, one motivation item per plan (its scope is unverified),
   and below-floor farm jobs are hidden from the normal score for the rest of the plan.

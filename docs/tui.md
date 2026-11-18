@@ -53,7 +53,11 @@ Ink (React without JSX: `const h = React.createElement`). Shell in `src/tui/app.
   highlighted quest, `*` silver/gold jobs discovered on the map), detail with the effective motivation reward
   tier, xp per energy, real location values when `job/job` has loaded, luck chance, queue with its end time and
   total. No chat here.
-- **Autopilot** (`autopilot.ts`, `g a`): left the priority and module settings, right the plan pane. `Q` opens
+- **Setup** (`setup.ts`, `g A`): fingerprint, world and login. `o` opens the `.net` world picker (`/` filters,
+  `j k` moves, Enter selects, Esc goes back; closed worlds are dimmed and cannot be selected), `l` logs in,
+  `c` continues with the selected world's saved session, `w` opens the browser setup page.
+- **Autopilot** (`autopilot.ts`, `g a`): left the priority and module settings (including `job duration`:
+  auto / 15 s / 10 min / 1 h), right the plan pane. `Q` opens
   the queue view, `R` runs/pauses, `X` stops. On the `farm jobs` row, `Space` opens the farm job picker: `/`
   filters by job or product, `Space` adds/removes, `J K` sets the round-robin order, `P` loads the blacksmith
   preset, `Esc` closes. On the `job blacklist` row, `Space` opens the blacklist picker: `/` filters, `Space`

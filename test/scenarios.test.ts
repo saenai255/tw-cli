@@ -388,6 +388,45 @@ test('J12 per hour with energy to spare: 50 XP in 10 min beats 200 XP in 1 h', (
   assert.equal(pick.tasks[0]!.key, 'job:2:middle');
 });
 
+test('J12b a fixed job duration is the only one planned, even when a longer run scores better', () => {
+  const pick = plan({
+    jobs: [job(1, { long: [48, 0, 12], middle: [23, 0, 5], short: [5, 0, 1] })],
+    maxJobs: 1,
+    config: (configValue) => {
+      configValue.jobs.duration = 'short';
+    },
+  });
+  assert.deepEqual(keys(pick, 1), ['job:1:short']);
+});
+
+test('J12c a fixed job duration applies to discovered silver/gold jobs', () => {
+  const normal = job(1, { short: [5, 0, 1], long: [48, 0, 12] });
+  const special = {
+    job: normal,
+    at: point(10),
+    special: 'silver' as const,
+    values: {
+      short: { duration: 15, energy: 1, experience: 10, money: 0, luck: 0, items: [] },
+      long: { duration: 3600, energy: 12, experience: 100, money: 0, luck: 0, items: [] },
+    },
+    valuesMotivation: 1,
+  };
+  const pick = plan({
+    jobs: [normal, job(2, { short: [1, 0, 1], long: [1000, 0, 12] })],
+    specialJobs: [special],
+    maxJobs: 1,
+    config: (configValue) => {
+      configValue.jobs.duration = 'short';
+    },
+  });
+  assert.ok(pick.tasks.length > 0);
+  assert.ok(
+    pick.tasks.every((task) => task.key.includes(':short')),
+    'no middle/long run',
+  );
+  assert.match(pick.tasks[0]!.key, /:silver:10,0$/, 'the boosted short run wins');
+});
+
 test('J13 only a money job: still worth doing with XP on top', () => {
   const pick = plan({ jobs: [job(1, { long: [0, 300] })] });
   assert.equal(pick.tasks[0]!.key, 'job:1:long');
@@ -508,6 +547,18 @@ test('Farm4 a farm job takes its duration with the most drops per energy', () =>
     config: (configValue) => farmConfig(configValue, [1]),
   });
   assert.equal(pick.tasks[0]!.key, 'job:1:short');
+});
+
+test('Farm4b a fixed job duration overrides the best drops per energy', () => {
+  const pick = plan({
+    jobs: [job(1, { short: [10, 0, 1, { 100000: 1 }], long: [10, 0, 12, { 100000: 5 }] }), job(2, { long: [100, 0] })],
+    maxJobs: 1,
+    config: (configValue) => {
+      farmConfig(configValue, [1]);
+      configValue.jobs.duration = 'long';
+    },
+  });
+  assert.equal(pick.tasks[0]!.key, 'job:1:long');
 });
 
 test('Farm5 the farm floor, not the normal 75 %, decides on motivation items', () => {

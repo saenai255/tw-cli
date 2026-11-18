@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, test } from 'node:test';
 import { AuthError, portalUrl } from '../src/auth/login.ts';
 import { ensureGame } from '../src/auth/session.ts';
+import { loadWorld } from '../src/auth/session-store.ts';
 import { type FingerprintProfile, hashComponents } from '../src/fingerprint/profile.ts';
 import { type HostPolicy, resetThrottle } from '../src/http/throttle.ts';
 
@@ -162,6 +163,7 @@ test('full login: portal → world → game.php bootstrap → record_fp, then se
     profile,
     policy: FAST,
     sessionFile,
+    worldFile: join(dir, 'world.json'),
     world: { url: GAME, locale: 'en_DK' },
     credentials: async () => ({ name: 'Tester', password: 'secret' }),
   };
@@ -202,6 +204,47 @@ test('full login: portal → world → game.php bootstrap → record_fp, then se
   assert.ok(calls.some((candidate) => candidate.url.includes('check_login')));
 });
 
+test('a selected world is the only one entered and is saved for the next start', async () => {
+  fakeServers();
+  const worldFile = join(dir, 'world.json');
+  const world = { url: GAME, locale: 'en_DK', id: 38, name: 'Quebec' };
+  const game = await ensureGame({
+    profile,
+    policy: FAST,
+    sessionFile: join(dir, 's.json'),
+    worldFile,
+    world,
+    credentials: async () => ({ name: 'Tester', password: 'secret' }),
+  });
+  assert.equal(game.bootstrap.h, '0b89b1');
+  assert.deepEqual(
+    calls
+      .filter((candidate) => candidate.url.endsWith('action=login'))
+      .map((candidate) => new URLSearchParams(candidate.body!).get('world_id')),
+    ['38'],
+    'only the picked world is tried',
+  );
+  assert.deepEqual(loadWorld(worldFile), { url: GAME, locale: 'en_DK', id: 38, name: 'Quebec' });
+});
+
+test('a picked world the account has no character on is reported before any login attempt', async () => {
+  fakeServers();
+  await assert.rejects(
+    ensureGame({
+      profile,
+      policy: FAST,
+      sessionFile: join(dir, 's.json'),
+      worldFile: join(dir, 'w.json'),
+      world: { url: 'https://en31.the-west.net', locale: 'en_DK', id: 37, name: 'Phoenix' },
+      credentials: async () => ({ name: 'Tester', password: 'secret' }),
+    }),
+    (entry: unknown) =>
+      entry instanceof AuthError &&
+      /This account has no character on Phoenix \(en31\.the-west\.net\), world 37/.test(entry.message),
+  );
+  assert.equal(calls.filter((candidate) => candidate.url.endsWith('action=login')).length, 0);
+});
+
 test('wrong password is reported', async () => {
   fakeServers();
   await assert.rejects(
@@ -209,6 +252,7 @@ test('wrong password is reported', async () => {
       profile,
       policy: FAST,
       sessionFile: join(dir, 's.json'),
+      worldFile: join(dir, 's-world.json'),
       world: { url: GAME, locale: 'en_DK' },
       credentials: async () => ({ name: 'Tester', password: 'nope' }),
     }),
@@ -222,6 +266,7 @@ test('a world that answers with the portal page does not stop the next world', a
     profile,
     policy: FAST,
     sessionFile: join(dir, 's.json'),
+    worldFile: join(dir, 's-world.json'),
     world: { url: GAME, locale: 'en_DK' },
     credentials: async () => ({ name: 'Tester', password: 'secret' }),
   });
@@ -242,6 +287,7 @@ test('no world leads to the game: the error says what the portal returned', asyn
       profile,
       policy: FAST,
       sessionFile: join(dir, 's.json'),
+      worldFile: join(dir, 's-world.json'),
       world: { url: GAME, locale: 'en_DK' },
       credentials: async () => ({ name: 'Tester', password: 'secret' }),
     }),
@@ -260,6 +306,7 @@ test('a portal start page means the login token was not accepted', async () => {
       profile,
       policy: FAST,
       sessionFile: join(dir, 's.json'),
+      worldFile: join(dir, 's-world.json'),
       world: { url: GAME, locale: 'en_DK' },
       credentials: async () => ({ name: 'Tester', password: 'secret' }),
     }),
@@ -277,6 +324,7 @@ test('a relative, JSON-escaped game URL in the login page is followed', async ()
     profile,
     policy: FAST,
     sessionFile: join(dir, 's.json'),
+    worldFile: join(dir, 's-world.json'),
     world: { url: GAME, locale: 'en_DK' },
     credentials: async () => ({ name: 'Tester', password: 'secret' }),
   });

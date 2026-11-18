@@ -25,6 +25,10 @@ screen (`g a`). Spec agreed with the user in a grill session ("Decisions").
 
 - `g a` opens the screen. `R` run/pause (paused still plans and shows "would do", sends nothing), `X` stop
   (pause + clear the plan; rules stay), `Space`/`Enter` toggle, `←→`/`+-` values, `J K` reorder priority.
+- **Job duration** (`auto` by default): `←→` cycles Auto / 15 s / 10 min / 1 h. A fixed value is the only
+  duration planned, for normal, discovered silver/gold and farm jobs; already queued runs of another duration
+  finish (cancel one with `c` in the `Q` view). Auto keeps the planner's per-goal choice, and the farm's best
+  drops per energy.
 - **Job blacklist** (`rules.excludedJobs`, saved in `autopilot.json`): `Space` on the `job blacklist` row opens
   the picker. `/` filters by job or product, `Space` excludes / includes, `Esc` closes. A blacklisted job is
   never queued by any part of the autopilot: normal jobs, discovered silver/gold variants and the farm. A task
@@ -56,6 +60,12 @@ screen (`g a`). Spec agreed with the user in a grill session ("Decisions").
   `farm: Wood · motivation 75%`; a motivation item says which job hit the floor. Sleeps: `energy low
   (8): sleep until …`; bank: `cash $X is over $Y: banking it`. Home shows the next task's title with its reason.
 - Header shows `autopilot ●` while running. Resumes on launch if it was running (after startup + first replan).
+
+## Worlds
+
+The client works on any `.net` world: `world.json` holds the world picked in setup and `session.json` keeps a
+session per game origin. Autopilot settings, rules, calibration and the daily spend stay per config dir, so
+separate accounts (or worlds with different settings) need separate `TW_CLI_HOME` instances.
 
 ## Debugging
 
@@ -156,6 +166,10 @@ screen (`g a`). Spec agreed with the user in a grill session ("Decisions").
   time + slot cost. Net energy = energy − XP × maxEnergy ÷ XP-per-level (a level-up refills energy), at least a
   quarter of the energy (the refill tops up to the max). Slot cost (`slotCost`, 10 min): each run takes a queue
   slot and the TUI is not always open, so runs that fill slots fast leave you idle.
+- **Duration**: only the `job duration` setting's candidates are built: Auto (both choices below) or one fixed
+  short/middle/long run for every job, discovered silver/gold and farm included. Auto's 10 min slot cost is why
+  a 1 h run usually beats a 15 s one on XP/energy even when the short run pays more XP per energy bar; a fixed
+  duration is the override.
 - **Motivation**: XP, money and luck chance scale with the game's 25 % breakpoints (`ceil(motivation × 4) / 4`);
   product drops and the luck value range do not. Each run lowers the job's motivation by 1 / 5 / 12 % for short,
   middle / long (official mechanics), and the plan tracks the accumulated drop per job, queued runs included.
@@ -210,8 +224,9 @@ It is for crafting materials and does not use shop sell price at all.
 - **Round-robin**: among eligible selected jobs it picks the one with the fewest runs already queued or planned,
   ties by list order. A replan therefore continues the cycle instead of restarting it, and every product gets
   its share.
-- **Duration**: per job, the duration with the most expected drop units per energy (long runs in practice;
-  short runs are slightly better per hour but cost far more energy).
+- **Duration**: with `job duration` Auto, per job the duration with the most expected drop units per energy
+  (long runs in practice; short runs are slightly better per hour but cost far more energy). A fixed job
+  duration overrides this, like everywhere else.
 - **Floor** (`farm.floor`, default 50 %, 0 disables): projected motivation is `job.motivation − drops already
   queued/planned`. At or below the floor the next job in the cycle uses one motivation item (if
   `use motivation items at the floor` is on), then the plan is rebuilt. At most one item per plan because
@@ -291,7 +306,7 @@ town you stand in, use an item, buy quest items).
 | Module                                                                                                            | Status                                                                                    |
 | ----------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
 | Queue jobs, priority, look-ahead                                                                                  | built                                                                                     |
-| Products farm (selected jobs, round-robin, floor, items, blacksmith preset)                                       | built; best duration per energy, floor per job, normal priority after it                  |
+| Products farm (selected jobs, round-robin, floor, items, blacksmith preset)                                       | built; auto: best duration per energy (a fixed job duration overrides); floor per job     |
 | Silver / gold jobs discovered on the map                                                                          | built; toggle off by default, real `job/job` values, no scanning (see "Silver/gold jobs") |
 | Energy sleep + wake rules + auto-cancel                                                                           | built (room rate units unverified)                                                        |
 | HP (sleep / item / skip risky jobs)                                                                               | built (danger → HP is a heuristic)                                                        |
@@ -318,10 +333,12 @@ at a hotel, 50–70 % keep working safely · NPC duels only (never players): HP 
 one loss stops them for the day, for XP when it beats the best job · plan to the 6 h horizon (was 10 jobs) · skip quests it cannot finish · level-up energy refund always on ·
 energy items: smallest that covers the next run and the level-up need, wait up to 1 h for a level-up (setting),
 largest first when none covers the whole level-up need, and a farther level-up uses the item even when each
-single wait is short · queue slots cost 10 min (the TUI is not open 24/7) · calibrate drops, HP, rooms from your
+single wait is short · queue slots cost 10 min (the TUI is not open 24/7) · a fixed job duration (auto by
+default) is a hard filter for normal, silver/gold and farm jobs · calibrate drops, HP, rooms from your
 own game · silver/gold jobs only when discovered by the normal map tile loads, real `job/job` values, toggle off
-by default, no scan · products are farmed by the Farm module: selected jobs in round-robin order, best duration
-per energy, 50 % floor with motivation items at most once per plan, below-floor jobs hidden from the normal score
+by default, no scan · products are farmed by the Farm module: selected jobs in round-robin order, auto = best
+duration per energy (a fixed job duration overrides), 50 % floor with motivation items at most once per plan,
+below-floor jobs hidden from the normal score
 for the rest of the plan, then the normal priority; no sell-price product goal · one job blacklist
 (`rules.excludedJobs`) shared by normal, silver/gold and farm jobs; a blacklisted job is not a quest source (buy
 it or skip the quest).

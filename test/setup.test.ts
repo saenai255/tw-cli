@@ -15,6 +15,8 @@ process.env.TW_CLI_HOME = home;
 delete process.env.TW_FP_PROFILE;
 delete process.env.TW_LOGIN_NAME;
 delete process.env.TW_LOGIN_PASSWORD;
+delete process.env.TW_WORLD_URL;
+delete process.env.TW_LOCALE;
 
 const React = (await import('react')).default;
 const { render } = await import('ink');
@@ -22,7 +24,7 @@ const { startWebServer } = await import('../src/web/server.ts');
 const { hashComponents } = await import('../src/fingerprint/profile.ts');
 const { SetupScreen } = await import('../src/tui/setup.ts');
 const { resetThrottle } = await import('../src/http/throttle.ts');
-const { PROFILE_FILE, SESSION_FILE } = await import('../src/auth/session-store.ts');
+const { PROFILE_FILE, SESSION_FILE, WORLD_FILE, loadWorld } = await import('../src/auth/session-store.ts');
 
 const components = [
   { key: 'language', value: 'en-GB' },
@@ -101,12 +103,12 @@ test('web page: token + host checks, no external assets, fingerprint save, login
     port: 0,
     log: () => {},
     onFingerprint: (fp) => saved.push(fp),
-    login: async (name, password, profileValue) => {
-      logins.push(`${name}:${password}:${profileValue.fp}`);
+    login: async (name, password, profileValue, world) => {
+      logins.push(`${name}:${password}:${profileValue.fp}:${world.name ?? '?'}`);
       if (password !== 'secret') {
         throw new Error('Login rejected: Wrong name or password');
       }
-      return { name: 'shallax', level: 30, world: 'Quebec' };
+      return { name: 'shallax', level: 30, world: world.name ?? '?' };
     },
   });
   try {
@@ -127,6 +129,10 @@ test('web page: token + host checks, no external assets, fingerprint save, login
     const lib = await http(`${base}/fingerprint2.js?t=${srv.token}`);
     assert.equal(lib.status, 200);
     assert.match(lib.body, /t\.VERSION="1\.8\.0"/);
+    // The world dropdown lists the .net worlds with the saved/default one selected.
+    assert.match(page.body, /<select id="world" name="world" required>/);
+    assert.match(page.body, /<option value="38" selected>Quebec · en32\.the-west\.net<\/option>/);
+    assert.match(page.body, /<option value="18">Arizona · en13\.the-west\.net<\/option>/);
 
     // Login before a fingerprint exists is refused.
     let result = await http(`${base}/api/login?t=${srv.token}`, {
@@ -165,7 +171,28 @@ test('web page: token + host checks, no external assets, fingerprint save, login
     });
     assert.equal(result.status, 200);
     assert.deepEqual(JSON.parse(result.body), { ok: true, name: 'shallax', level: 30, world: 'Quebec' });
-    assert.deepEqual(logins.at(-1), `Tester:secret:${profile.fp}`);
+    assert.deepEqual(logins.at(-1), `Tester:secret:${profile.fp}:Quebec`);
+
+    // The page's world select picks any open .net world; closed and unknown ids are refused.
+    result = await http(`${base}/api/login?t=${srv.token}`, {
+      method: 'POST',
+      body: JSON.stringify({ name: 'Tester', password: 'secret', world: 18 }),
+    });
+    assert.equal(result.status, 200);
+    assert.deepEqual(JSON.parse(result.body), { ok: true, name: 'shallax', level: 30, world: 'Arizona' });
+    assert.deepEqual(logins.at(-1), `Tester:secret:${profile.fp}:Arizona`);
+    result = await http(`${base}/api/login?t=${srv.token}`, {
+      method: 'POST',
+      body: JSON.stringify({ name: 'Tester', password: 'secret', world: 23 }),
+    });
+    assert.equal(result.status, 400);
+    assert.match(result.body, /Halloween Speed is closed/);
+    result = await http(`${base}/api/login?t=${srv.token}`, {
+      method: 'POST',
+      body: JSON.stringify({ name: 'Tester', password: 'secret', world: 9999 }),
+    });
+    assert.equal(result.status, 400);
+    assert.match(result.body, /Unknown world 9999/);
   } finally {
     await srv.close();
   }
@@ -174,6 +201,7 @@ test('web page: token + host checks, no external assets, fingerprint save, login
 // Fake portal + game for the in-TUI login.
 const PORTAL = 'https://www.the-west.net';
 const GAME = 'https://en32.the-west.net';
+const ARIZONA = 'https://en13.the-west.net';
 let realFetch: typeof fetch;
 before(() => {
   realFetch = globalThis.fetch;
@@ -202,10 +230,16 @@ test('TUI setup: type fingerprint + User-Agent, log in with name/password', asyn
       if (urlValue.get('password') !== 'secret') {
         return Response.json({ error: 'Wrong name or password' });
       }
-      return Response.json({ player_id: 42, password: 'tok', playerWorlds: { 38: [38, 1] } });
+      return Response.json({
+        player_id: 42,
+        password: 'tok',
+        playerWorlds: { 18: [18, 1], 38: [38, 1] },
+      });
     }
     if (url.endsWith('action=login')) {
-      return res(302, [['location', `${GAME}/game.php?sid=s1`]]);
+      const worldId = new URLSearchParams(body).get('world_id');
+      const host = worldId === '18' ? ARIZONA : GAME;
+      return res(302, [['location', `${host}/game.php?sid=s1`]]);
     }
     if (url.includes('game.php?sid=')) {
       return res(302, [
@@ -213,14 +247,15 @@ test('TUI setup: type fingerprint + User-Agent, log in with name/password', asyn
         ['set-cookie', 'sid=s1; path=/'],
       ]);
     }
-    if (url === `${GAME}/game.php`) {
+    if (url.endsWith('/game.php')) {
       if (!cookie.includes('sid=s1')) {
         return res(302, [['location', `${PORTAL}/`]]);
       }
+      const worldName = new URL(url).host === new URL(ARIZONA).host ? 'Arizona' : 'Quebec';
       return res(
         200,
         [],
-        '<script>Game.init({"currentWorldName":"Quebec","jobs":[]});Player.init({"h":"0b89b1"});Character.init({"playerId":42,"name":"shallax","level":30,"pos":{"x":1,"y":1},"taskQueue":[]});</script>',
+        `<script>Game.init({"currentWorldName":"${worldName}","jobs":[]});Player.init({"h":"0b89b1"});Character.init({"playerId":42,"name":"shallax","level":30,"pos":{"x":1,"y":1},"taskQueue":[]});</script>`,
       );
     }
     if (url.includes('record_fp')) {
@@ -284,6 +319,20 @@ test('TUI setup: type fingerprint + User-Agent, log in with name/password', asyn
     assert.match(plain(), new RegExp(`✔ ${profile.fp}`));
     assert.match(plain(), /hash only/);
 
+    // World picker: filter to Arizona and select it; the row and world.json follow.
+    assert.match(plain(), /World\s+Quebec · en32\.the-west\.net/);
+    await type('o');
+    assert.match(plain(), /Worlds · 15 open, 2 closed/);
+    assert.match(plain(), /Arizona/);
+    await type('/');
+    await type('ariz');
+    await type('\r');
+    await type('\r');
+    await settle();
+    assert.match(plain(), /World\s+Arizona · en13\.the-west\.net/);
+    assert.equal(loadWorld(WORLD_FILE)?.id, 18);
+    assert.equal(loadWorld(WORLD_FILE)?.name, 'Arizona');
+
     await type('l');
     await type('Tester\r');
     await type('secret');
@@ -296,9 +345,13 @@ test('TUI setup: type fingerprint + User-Agent, log in with name/password', asyn
     }
     assert.ok(ready, 'login finished');
     assert.equal(ready.bootstrap.character.name, 'shallax');
+    assert.equal(ready.client.worldUrl, ARIZONA);
+    assert.equal(ready.bootstrap.game.currentWorldName, 'Arizona');
     assert.ok(seen.every((source) => source.ua === 'Mozilla/5.0 Test'));
     assert.equal(seen.find((source) => source.url.includes('record_fp'))!.body, `fp=${profile.fp}&gv=&wd=false`);
+    assert.ok(seen.some((source) => source.url.startsWith(ARIZONA)));
     assert.ok(existsSync(SESSION_FILE));
+    assert.equal(loadWorld(WORLD_FILE)?.id, 18);
   } finally {
     app.unmount();
   }

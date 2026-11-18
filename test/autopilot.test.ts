@@ -139,6 +139,8 @@ test('autopilot file: defaults, merge of saved values, ranking repaired, bad inp
   assert.equal(autopilotFile.config.modules.farm, true);
   assert.deepEqual(autopilotFile.config.farm, { jobs: [5, 25], floor: 1, items: true });
   assert.equal('unknown' in autopilotFile.config, false);
+  assert.equal(parseAutopilotFile({ config: { jobs: { duration: 'short' } } }).config.jobs.duration, 'short');
+  assert.equal(parseAutopilotFile({ config: { jobs: { duration: 'weird' } } }).config.jobs.duration, 'auto');
   assert.deepEqual(autopilotFile.rules.excludedJobs, [5, 25]);
   assert.equal(autopilotFile.plan?.fingerprint, 'abc');
   assert.deepEqual(goalWeights(autopilotFile.config), {
@@ -262,6 +264,7 @@ test('autopilot screen: toggles, values, ranking, blacklist and farm pickers cha
     assert.match(plain(), /‖ paused/);
     assert.match(plain(), /1 Quests completed/);
     assert.match(plain(), /4 Lucky finds \(chance × max\)/);
+    assert.match(plain(), /job duration: auto \(planner picks\)/);
     assert.match(plain(), /Cutting tobacco/);
     assert.match(plain(), /\+45 XP/);
     assert.match(plain(), /In the queue/);
@@ -275,8 +278,8 @@ test('autopilot screen: toggles, values, ranking, blacklist and farm pickers cha
     app.rerender(el());
     await settle();
     assert.match(plain(), /● running/);
-    // Job blacklist picker: open, exclude a job, close.
-    await keys('j', 'j', 'j', ' ');
+    // Job blacklist picker: open (past the new job-duration row), exclude a job, close.
+    await keys('j', 'j', 'j', 'j', ' ');
     assert.match(plain(), /Job blacklist {2}0 excluded/);
     await keys(' ');
     assert.deepEqual(state.autopilot.rules.excludedJobs, [5]);
@@ -313,6 +316,15 @@ test('autopilot screen: toggles, values, ranking, blacklist and farm pickers cha
     await keys('X');
     assert.equal(state.autopilot.config.running, false);
     assert.match(state.logs.at(-1), /stopped/);
+    // Job duration: from the farm jobs row up to it; → cycles auto → 15 s.
+    for (let index = 0; index < 5; index++) {
+      await keys('k');
+    }
+    await keys('\x1b[C');
+    assert.equal(state.autopilot.config.jobs.duration, 'short');
+    app.rerender(el());
+    await settle();
+    assert.match(plain(), /job duration: 15 s/);
     assert.ok(saved.length >= 5, 'every change is saved');
   } finally {
     app.unmount();

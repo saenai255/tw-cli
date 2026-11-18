@@ -15,6 +15,10 @@ export const GOALS: Goal[] = ['quests', 'xp', 'money', 'luck'];
 /** Weights by rank: the top goal decides, the rest break ties. */
 export const RANK_WEIGHTS = [1, 0.25, 0.06, 0.015];
 
+/** `auto` lets the planner pick per job; a fixed value is the only duration queued (farm included). */
+export type JobDuration = 'auto' | 'short' | 'middle' | 'long';
+export const JOB_DURATIONS: JobDuration[] = ['auto', 'short', 'middle', 'long'];
+
 export type ModuleKey =
   | 'jobs'
   | 'farm'
@@ -50,9 +54,9 @@ export interface AutopilotConfig {
   ownTownWithin: number;
   /**
    * Job rules: `special` lets the planner use discovered silver/gold jobs; `moveMargin` is how much better
-   * a job elsewhere must be before the plan walks there.
+   * a job elsewhere must be before the plan walks there; `duration` pins short/middle/long (auto = per job).
    */
-  jobs: { special: boolean; moveMargin: number };
+  jobs: { special: boolean; moveMargin: number; duration: JobDuration };
   bank: { above: number; maxDetour: number };
   /** `levelUpWait`: wait this long (s) for a level-up instead of using an energy item; 0 disables the wait. */
   consumables: { energy: boolean; health: boolean; motivation: boolean; reserve: number; levelUpWait: number };
@@ -105,7 +109,7 @@ export const DEFAULT_CONFIG: AutopilotConfig = {
   wake: { levelUp: true, stretch: false, hpSafe: true, full: false },
   hp: { sleepBelow: 0.5, wakeAbove: 0.7 },
   ownTownWithin: 3600,
-  jobs: { special: false, moveMargin: 0.2 },
+  jobs: { special: false, moveMargin: 0.2, duration: 'auto' },
   bank: { above: 4500, maxDetour: 1800 },
   consumables: { energy: true, health: true, motivation: false, reserve: 2, levelUpWait: 3600 },
   quests: {
@@ -220,6 +224,9 @@ export function parseAutopilotFile(json: unknown): AutopilotFile {
   // Farm job ids, in the saved order. Floor stays a fraction.
   config.farm.jobs = jobIds(obj(obj(raw.config).farm).jobs);
   config.farm.floor = Math.max(0, Math.min(1, config.farm.floor));
+  if (!JOB_DURATIONS.includes(config.jobs.duration)) {
+    config.jobs.duration = 'auto';
+  }
   const rules = mergeDefaults(EMPTY_RULES, raw.rules);
   // The queue view's blacklist: same rules as the farm ids, so hand-edited files cannot surprise a replan.
   rules.excludedJobs = jobIds(obj(raw.rules).excludedJobs);

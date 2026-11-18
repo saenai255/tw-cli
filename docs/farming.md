@@ -25,8 +25,8 @@ Wood is also dropped by Rafting wood (46, more XP/money) and Felling trees (27, 
 picks Clearing the forest for product rate, and the picker can add the others to a custom list.
 
 One full cycle is 96 energy for about 30 items across all eight products. Short runs are slightly better per
-hour but cost far more energy per hour (a 15 s run costs 1 E, a 1 h run 12 E), so the farm picks the best
-duration per energy.
+hour but cost far more energy per hour (a 15 s run costs 1 E, a 1 h run 12 E), so with job duration Auto the
+farm picks the best duration per energy. A fixed job duration on `g a` overrides that, like all autopilot jobs.
 
 ## Floor and motivation
 

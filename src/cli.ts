@@ -4,7 +4,9 @@
 //   tw fp set <hash>      save a hash-only fingerprint (copied from the browser console)
 //   tw fp ua "<UA>" [langs] set the browser User-Agent (and languages, e.g. en-US,en)
 //   tw fp show            show the installed profile summary
-//   tw login              log in (prompts for name/password unless TW_LOGIN_NAME/PASSWORD set)
+//   tw login [world]      log in to a world by name or portal id (prompts for name/password unless
+//                         TW_LOGIN_NAME/PASSWORD set); without an argument the world picked last is used
+//   tw worlds             list the .net worlds
 //   tw whoami             show character status (reuses the saved session)
 //   tw [play]             full-screen TUI (setup, jobs, task queue, map)
 //   tw web                local browser page for fingerprint capture and login
@@ -13,9 +15,10 @@
 import { chmodSync, copyFileSync, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { createInterface } from 'node:readline';
-import type { Credentials } from './auth/login.ts';
-import { DEFAULT_WORLD, ensureGame } from './auth/session.ts';
+import type { Credentials, WorldConfig } from './auth/login.ts';
+import { ensureGame, selectedWorld } from './auth/session.ts';
 import { PROFILE_FILE } from './auth/session-store.ts';
+import { NET_WORLDS, worldByName, worldConfig } from './auth/worlds.ts';
 import { loadProfile, readProfileRaw, writeProfileFields } from './fingerprint/profile.ts';
 import { GameState } from './game/state.ts';
 import { queueSummary } from './game/tasks.ts';
@@ -54,6 +57,23 @@ async function promptCredentials(): Promise<Credentials> {
 }
 
 const log = (message: string) => console.error(message);
+
+const openWorldList = (): string =>
+  NET_WORLDS.filter((world) => world.open)
+    .map((world) => `${world.name} (${world.id})`)
+    .join(', ');
+
+/** A world from `tw login <name|id>`; a closed world is refused with the open ones listed. */
+function chosenWorld(input: string): WorldConfig {
+  const world = worldByName(input);
+  if (!world) {
+    throw new Error(`Unknown world "${input}". Open .net worlds: ${openWorldList()}`);
+  }
+  if (!world.open) {
+    throw new Error(`${world.name} is closed. Open .net worlds: ${openWorldList()}`);
+  }
+  return worldConfig(world);
+}
 
 async function openState(): Promise<GameState> {
   const game = await ensureGame({ credentials: promptCredentials, log });
@@ -169,17 +189,30 @@ async function main(argv: string[]): Promise<number> {
       break;
     }
     case 'login': {
-      const game = await ensureGame({ forceLogin: true, credentials: promptCredentials, log });
-      console.log(`Logged in to ${DEFAULT_WORLD.url} as ${game.bootstrap.character?.name ?? '?'}`);
+      const world = subcommand ? chosenWorld(subcommand) : undefined;
+      const game = await ensureGame({ world, forceLogin: true, credentials: promptCredentials, log });
+      const name = String(game.bootstrap.game?.currentWorldName ?? world?.name ?? game.client.worldUrl);
+      console.log(`Logged in to ${name} (${game.client.worldUrl}) as ${game.bootstrap.character?.name ?? '?'}`);
+      return 0;
+    }
+    case 'worlds': {
+      const current = selectedWorld();
+      for (const world of NET_WORLDS) {
+        const marker = world.url === current.url ? '*' : ' ';
+        console.log(
+          `${marker} ${String(world.id).padStart(2)}  ${world.name.padEnd(17)} ${world.url.padEnd(30)} ${world.open ? 'open' : 'closed'}`,
+        );
+      }
       return 0;
     }
     case 'whoami':
     case 'status': {
       const { bootstrap } = await ensureGame({ credentials: promptCredentials, log });
       const character = bootstrap.character ?? {};
+      const world = selectedWorld();
       console.log(
         [
-          `${character.name} (level ${character.level}, ${String(obj(character.charClass).type ?? '?')}) on ${String(bootstrap.game?.currentWorldName ?? DEFAULT_WORLD.url)}`,
+          `${character.name} (level ${character.level}, ${String(obj(character.charClass).type ?? '?')}) on ${String(bootstrap.game?.currentWorldName ?? world.name ?? world.url)}`,
           `HP ${character.health}/${character.maxHealth ?? '?'}  Energy ${character.energy}/${character.maxEnergy}  XP ${character.experience}`,
           `$${character.cash} cash, $${character.deposit} bank  Nuggets ${character.nuggets}`,
           `Position ${String(obj(character.pos).x)},${String(obj(character.pos).y)}  Tasks queued ${Array.isArray(character.taskQueue) ? character.taskQueue.length : '?'}/${character.taskLimit}`,
@@ -189,7 +222,7 @@ async function main(argv: string[]): Promise<number> {
     }
   }
   console.error(
-    'usage: tw [play] | tw web | tw jobs [filter] | tw queue | tw login | tw whoami | tw fp import <file> | tw fp set <hash> | tw fp ua "<UA>" [langs] | tw fp show',
+    'usage: tw [play] | tw web | tw jobs [filter] | tw queue | tw login [world] | tw worlds | tw whoami | tw fp import <file> | tw fp set <hash> | tw fp ua "<UA>" [langs] | tw fp show',
   );
   return 2;
 }

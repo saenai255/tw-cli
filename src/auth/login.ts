@@ -2,7 +2,8 @@
 //  1. GET  https://www.the-west.net/            sets the cookies the login form expects
 //  2. POST /index.php?ajax=check_login&locale=  name+password → player_id, login token, playerWorlds
 //  3. POST /index.php?action=login              world_id, player_id, token → redirect to game.php?sid=…
-//     A world the account cannot enter answers 200 with the portal page, not a redirect; other worlds are tried.
+//     A world the account cannot enter answers 200 with the portal page, not a redirect. The world picked in
+//     setup is tried alone; an env-configured TW_WORLD_URL (no id) falls back to trying every account world.
 //  4. GET  that URL, following redirects        sets the world's session cookies
 // then openGame(): GET game.php → Player.init h + state, and record_fp like the page's fp-script.
 
@@ -19,10 +20,14 @@ export class AuthError extends Error {}
 const MAX_REDIRECTS = 4;
 
 export interface WorldConfig {
-  /** e.g. https://en32.the-west.net */
+  /** Game origin, e.g. https://en32.the-west.net */
   url: string;
-  /** portal locale, e.g. en_DK for the English market */
+  /** Portal locale, e.g. en_DK for the English market */
   locale: string;
+  /** Portal world id (the key in check_login's playerWorlds), when known. */
+  id?: number | undefined;
+  /** Name the portal shows, e.g. Quebec. */
+  name?: string | undefined;
 }
 
 export interface Credentials {
@@ -196,10 +201,16 @@ export async function loginToWorld(
   await portalPage.body?.cancel().catch(() => {});
 
   const account = await checkLogin(world, credentials, jar, identity, policy);
+  const label = world.name ? `${world.name} (${new URL(world.url).host})` : new URL(world.url).host;
+  // A world chosen from the dropdown is entered only when the account has it; without an id (a plain
+  // TW_WORLD_URL) every account world is tried and only the one answering on the configured host counts.
+  if (world.id !== undefined && !account.worlds.includes(world.id)) {
+    throw new AuthError(`This account has no character on ${label}, world ${world.id}`);
+  }
   // One at a time: each attempt rewrites the jar's session cookies. A world that answers with a portal page
   // (closed, inaccessible, or simply not this account's) must not stop the others from being tried.
   const failures: string[] = [];
-  for (const worldId of account.worlds) {
+  for (const worldId of world.id !== undefined ? [world.id] : account.worlds) {
     const attempt = await enterWorld(world, jar, identity, account, worldId, policy);
     if (attempt.entered) {
       return jar;
@@ -211,7 +222,7 @@ export async function loginToWorld(
   if (failures.length) {
     throw new AuthError(`Login did not lead to the game (${failures.join('; ')})`);
   }
-  throw new AuthError(`This account has no character on ${new URL(world.url).host}`);
+  throw new AuthError(`This account has no character on ${label}`);
 }
 
 export interface OpenGame {

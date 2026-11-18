@@ -1,12 +1,13 @@
 // Setup screen inside the TUI: everything `tw web` / `tw fp …` / `tw login` can do.
 
-import { chmodSync, copyFileSync, existsSync, mkdirSync } from 'node:fs';
+import { chmodSync, copyFileSync, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
-import { Box, Text, useInput } from 'ink';
+import { Box, Text, useInput, useWindowSize } from 'ink';
 import React, { useEffect, useRef, useState } from 'react';
-import type { OpenGame } from '../auth/login.ts';
-import { DEFAULT_WORLD, ensureGame } from '../auth/session.ts';
-import { PROFILE_FILE, SESSION_FILE } from '../auth/session-store.ts';
+import type { OpenGame, WorldConfig } from '../auth/login.ts';
+import { ensureGame, selectedWorld } from '../auth/session.ts';
+import { hasSession, PROFILE_FILE, saveWorld } from '../auth/session-store.ts';
+import { NET_WORLDS, type NetWorld, worldConfig } from '../auth/worlds.ts';
 import {
   type FingerprintProfile,
   loadProfile,
@@ -17,6 +18,7 @@ import {
 import type { HostPolicy } from '../http/throttle.ts';
 import { errorMessage } from '../util/errors.ts';
 import { defaultWebAddress, startWebServer } from '../web/server.ts';
+import { scrollWindow, truncate } from './format.ts';
 
 const createElement = React.createElement;
 
@@ -78,11 +80,30 @@ export function SetupScreen({ onReady, onBack, onQuit, message, policy }: SetupP
   const webRef = useRef<{ close: () => Promise<void> } | null>(null);
   const readyRef = useRef(onReady);
   readyRef.current = onReady;
+  const { columns, rows } = useWindowSize();
+  const [pickingWorld, setPickingWorld] = useState(false);
+  const [worldPick, setWorldPick] = useState(0);
+  const [worldFilter, setWorldFilter] = useState('');
+  const [worldFiltering, setWorldFiltering] = useState(false);
 
   useEffect(() => () => void webRef.current?.close(), []);
 
+  const world = selectedWorld();
+  const worldHost = new URL(world.url).host;
+  // An env-configured TW_WORLD_URL is not in the list: show it first, still selectable.
+  const worlds: NetWorld[] = NET_WORLDS.some((entry) => entry.url === world.url)
+    ? NET_WORLDS
+    : [{ id: world.id ?? 0, name: world.name ?? worldHost, url: world.url, open: true }, ...NET_WORLDS];
+  const wanted = worldFilter.trim().toLowerCase();
+  const shownWorlds = wanted
+    ? worlds.filter(
+        (entry) =>
+          entry.name.toLowerCase().includes(wanted) || String(entry.id) === wanted || entry.url.includes(wanted),
+      )
+    : worlds;
+  const worldIndex = Math.max(0, Math.min(worldPick, shownWorlds.length - 1));
   const status = profileStatus();
-  const haveSession = existsSync(SESSION_FILE);
+  const haveSession = hasSession(world.url);
 
   const finish = (game: OpenGame) => {
     void webRef.current?.close();
@@ -96,6 +117,7 @@ export function SetupScreen({ onReady, onBack, onQuit, message, policy }: SetupP
     try {
       const profile = loadProfile(PROFILE_FILE);
       const game = await ensureGame({
+        world,
         forceLogin: true,
         profile,
         policy,
@@ -114,6 +136,7 @@ export function SetupScreen({ onReady, onBack, onQuit, message, policy }: SetupP
     setStatusMessage({ text: 'Connecting with the saved session…' });
     try {
       const game = await ensureGame({
+        world,
         policy,
         credentials: async () => {
           throw new Error('Saved session expired. Log in with l.');
@@ -144,8 +167,9 @@ export function SetupScreen({ onReady, onBack, onQuit, message, policy }: SetupP
           setStatusMessage({ text: `Fingerprint ${fp} saved from the browser.` });
           refresh();
         },
-        login: async (name, password, profile) => {
+        login: async (name, password, profile, worldValue: WorldConfig) => {
           const game = await ensureGame({
+            world: worldValue,
             forceLogin: true,
             profile,
             policy,
@@ -156,7 +180,7 @@ export function SetupScreen({ onReady, onBack, onQuit, message, policy }: SetupP
           return {
             name: String(json.name ?? '?'),
             level: Number(json.level ?? 0),
-            world: String(game.bootstrap.game?.currentWorldName ?? DEFAULT_WORLD.url),
+            world: String(game.bootstrap.game?.currentWorldName ?? worldValue.name ?? worldValue.url),
           };
         },
       });
@@ -204,7 +228,73 @@ export function SetupScreen({ onReady, onBack, onQuit, message, policy }: SetupP
     refresh();
   };
 
+  const openWorldPicker = () => {
+    setWorldPick(
+      Math.max(
+        0,
+        worlds.findIndex((entry) => entry.url === world.url),
+      ),
+    );
+    setWorldFilter('');
+    setWorldFiltering(false);
+    setPickingWorld(true);
+  };
+
+  const chooseWorld = (entry: NetWorld) => {
+    if (!entry.open) {
+      setStatusMessage({ text: `${entry.name} is closed; pick an open world.`, bad: true });
+      return;
+    }
+    saveWorld(worldConfig(entry));
+    setPickingWorld(false);
+    setStatusMessage({
+      text: `World ${entry.name} selected (${entry.url}).${process.env.TW_WORLD_URL ? ' TW_WORLD_URL still overrides it; unset it to use this.' : ''}`,
+    });
+    refresh();
+  };
+
   useInput((input, key) => {
+    if (pickingWorld) {
+      if (worldFiltering) {
+        if (key.return || key.escape) {
+          setWorldFiltering(false);
+          if (key.escape) {
+            setWorldFilter('');
+          }
+          setWorldPick(0);
+        } else if (key.backspace || key.delete) {
+          setWorldFilter((value) => value.slice(0, -1));
+          setWorldPick(0);
+        } else if (input && !key.ctrl && !key.meta && !key.return) {
+          setWorldFilter((value) => value + input);
+          setWorldPick(0);
+        }
+        return;
+      }
+      if (key.escape) {
+        return setPickingWorld(false);
+      }
+      if (input === '/') {
+        return setWorldFiltering(true);
+      }
+      if (key.upArrow || input === 'k') {
+        return setWorldPick(Math.max(0, worldIndex - 1));
+      }
+      if (key.downArrow || input === 'j') {
+        return setWorldPick(Math.max(0, Math.min(shownWorlds.length - 1, worldIndex + 1)));
+      }
+      if (key.pageUp) {
+        return setWorldPick(Math.max(0, worldIndex - 10));
+      }
+      if (key.pageDown) {
+        return setWorldPick(Math.max(0, Math.min(shownWorlds.length - 1, worldIndex + 10)));
+      }
+      const entry = shownWorlds[worldIndex];
+      if (entry && (input === ' ' || key.return)) {
+        return chooseWorld(entry);
+      }
+      return;
+    }
     if (field) {
       if (key.escape) {
         setField(null);
@@ -226,6 +316,9 @@ export function SetupScreen({ onReady, onBack, onQuit, message, policy }: SetupP
     }
     if (key.escape && onBack) {
       return onBack();
+    }
+    if (input === 'o') {
+      return openWorldPicker();
     }
     if (input === 'w') {
       return void toggleWeb();
@@ -251,6 +344,44 @@ export function SetupScreen({ onReady, onBack, onQuit, message, policy }: SetupP
     }
   });
 
+  if (pickingWorld) {
+    const width = Math.min(columns || 80, 100);
+    const height = Math.min(rows || 24, 24);
+    const [start, end] = scrollWindow(worldIndex, shownWorlds.length, Math.max(3, height - 4));
+    const openCount = worlds.filter((entry) => entry.open).length;
+    const nameWidth = Math.max(10, Math.min(24, width - 30));
+    const heading = worldFiltering
+      ? `Worlds  filter: ${worldFilter}▏`
+      : worldFilter
+        ? `Worlds  (filter: ${worldFilter})`
+        : `Worlds · ${openCount} open, ${worlds.length - openCount} closed`;
+    return createElement(
+      Box,
+      { flexDirection: 'column', borderStyle: 'round', borderColor: 'yellow', width, height, paddingX: 1 },
+      createElement(Text, { bold: true, color: 'yellow', wrap: 'truncate' }, heading),
+      createElement(
+        Text,
+        { dimColor: true, wrap: 'truncate' },
+        worldFiltering
+          ? 'type to filter · Enter done · Esc clear'
+          : 'Enter / Space select · / filter · j k move · Esc back',
+      ),
+      ...shownWorlds.slice(start, end).map((entry, offset) => {
+        const index = start + offset;
+        const current = entry.url === world.url;
+        return createElement(
+          Text,
+          { key: entry.url, inverse: index === worldIndex, dimColor: !entry.open, wrap: 'truncate' },
+          `${current ? '●' : ' '} ${entry.open ? ' ' : '×'} ${truncate(entry.name, nameWidth)} ${new URL(entry.url).host.padEnd(18)}${entry.open ? '' : ' closed'}`,
+        );
+      }),
+      shownWorlds.length ? null : createElement(Text, { dimColor: true }, 'No world matches that filter.'),
+      statusMessage
+        ? createElement(Text, { color: statusMessage.bad ? 'red' : 'green', wrap: 'wrap' }, statusMessage.text)
+        : null,
+    );
+  }
+
   const item = (entryKey: string, label: string, enabled = true) =>
     createElement(
       Text,
@@ -263,7 +394,11 @@ export function SetupScreen({ onReady, onBack, onQuit, message, policy }: SetupP
     Box,
     { flexDirection: 'column', borderStyle: 'round', borderColor: 'yellow', paddingX: 2, paddingY: 0 },
     createElement(Text, { bold: true, color: 'yellow' }, 'Setup · fingerprint & login'),
-    createElement(Text, { dimColor: true }, `World ${DEFAULT_WORLD.url} (${DEFAULT_WORLD.locale})`),
+    createElement(
+      Text,
+      { dimColor: true },
+      `World  ${world.name ?? worldHost} · ${worldHost} · ${world.locale}${process.env.TW_WORLD_URL ? ' · TW_WORLD_URL override' : ''}`,
+    ),
     createElement(Text, null, ' '),
     createElement(
       Text,
@@ -278,10 +413,14 @@ export function SetupScreen({ onReady, onBack, onQuit, message, policy }: SetupP
       Text,
       null,
       'Session      ',
-      haveSession ? createElement(Text, { color: 'green' }, 'saved') : createElement(Text, { color: 'red' }, 'none'),
+      haveSession
+        ? createElement(Text, { color: 'green' }, 'saved for this world')
+        : createElement(Text, { color: 'red' }, 'none for this world'),
       createElement(Text, { dimColor: true }, haveSession ? '  (c to continue with it)' : ''),
     ),
     createElement(Text, null, ' '),
+    createElement(Text, { bold: true }, 'World'),
+    item('o', 'choose a .net world (all worlds)'),
     createElement(Text, { bold: true }, 'Fingerprint'),
     item('w', web ? 'stop the browser setup page' : 'open a setup page in your browser (fingerprint + login)'),
     item('f', 'type a fingerprint hash'),

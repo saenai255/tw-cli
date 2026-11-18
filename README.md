@@ -2,7 +2,7 @@
 
 [![Tests](https://github.com/saenai255/tw-cli/actions/workflows/test.yml/badge.svg?branch=main)](https://github.com/saenai255/tw-cli/actions/workflows/test.yml)
 
-A terminal client for [The West](https://www.the-west.net) (world en32 "Quebec"). It uses the same HTTP requests as the browser game.
+A terminal client for [The West](https://www.the-west.net), any `.net` world (Arizona … Quebec; Quebec by default). It uses the same HTTP requests as the browser game.
 
 > Unofficial. Third-party clients may break InnoGames' terms of service. Use at your own risk.
 
@@ -20,20 +20,24 @@ npm install
 
 The game records a browser fingerprint at login, so tw-cli needs the fingerprint of the browser you normally play with.
 
-**Easiest:** run `npm run tw -- web`, open the local page it prints, and log in there. It captures the fingerprint and saves your session.
+**Easiest:** run `npm run tw -- web`, open the local page it prints, pick your `.net` world and log in there. It captures the fingerprint and saves your session.
 
 **Or by hand:**
 
 1. Open `game.php` in your browser while logged in, paste `tools/capture-fingerprint.js` into the DevTools console, and save the copied JSON to a file.
 2. `npm run tw -- fp import <file>`
-3. `npm run tw -- login` (asks for name and password; or set `TW_LOGIN_NAME` / `TW_LOGIN_PASSWORD`)
+3. `npm run tw -- login [world]` (asks for name and password; or set `TW_LOGIN_NAME` / `TW_LOGIN_PASSWORD`).
+   Without a world it uses the one picked last; `npm run tw -- worlds` lists all `.net` worlds.
 
-Everything is stored in `~/.config/tw-cli/` (session with mode 0600). Set `TW_CLI_HOME` to use another folder.
+In the TUI, `g A` opens setup: `o` picks another `.net` world, `l` logs in. Everything is stored in
+`~/.config/tw-cli/` (session, fingerprint and `world.json` with mode 0600; sessions are kept per world). Set
+`TW_CLI_HOME` to use another folder. `TW_WORLD_URL=https://en13.the-west.net` overrides the picked world (and
+`TW_LOCALE` its portal locale), e.g. for scripts.
 
 ### More than one account
 
-There is no in-app account switcher. Run one process per account, each with its own `TW_CLI_HOME`; the session,
-fingerprint, autopilot settings, calibration, caches and debug logs all stay under that folder:
+There is no in-app account switcher. Run one process per account, each with its own `TW_CLI_HOME`; the world
+choice, sessions, fingerprint, autopilot settings, calibration, caches and debug logs all stay under that folder:
 
 ```sh
 TW_CLI_HOME=~/.config/tw-cli/alt npm run tw
@@ -49,6 +53,7 @@ npm run tw            # full-screen TUI
 npm run tw -- whoami  # character status
 npm run tw -- jobs    # doable jobs, nearest location, travel time
 npm run tw -- queue   # task queue
+npm run tw -- worlds  # the .net worlds: portal id, host, open/closed
 npm run tw -- web     # local page for fingerprint + login
 ```
 
@@ -90,14 +95,17 @@ part is a toggle with safe defaults, and the plan pane says what it will do next
   Reward values follow the game's 25 % motivation breakpoints, and each run's motivation loss is tracked. It
   stays at the current spot unless another is 20 % better, and a server-full queue is waited out, not retried
   job by job. When the game page has no position yet it waits for one instead of planning from the map origin.
+  **Job duration** (`g a`): Auto lets the planner choose; 15 s / 10 min / 1 h forces that duration for every
+  autopilot job, including the farm and discovered silver/gold jobs.
 - **Blacklist** jobs you never want queued (`g a` → `job blacklist`): `/` filters by job or product, `Space`
   excludes or includes. It covers normal jobs, discovered silver/gold variants and the farm; `d` in the `Q`
   queue view is a shortcut and `u` there clears the list. A task already on the server runs out; `c` cancels it.
 - **Farm selected jobs** round-robin (`g a` → Farm, off by default): pick 5–10 jobs in the picker (`Space`
   chooses, `/` filters by job or product, `J K` sets the order, `P` loads the eight early blacksmith-product
-  jobs). It takes each job's best duration per energy, uses a motivation item when the next job reaches the
-  floor (50 % by default), and drops that job back to the normal priority when no item is left. Product drops
-  do not depend on motivation, so a floor of 0 is pure harvesting; a selected job on the blacklist is skipped.
+  jobs). With job duration Auto it takes each job's best duration per energy (a fixed duration overrides
+  that), uses a motivation item when the next job reaches the floor (50 % by default), and drops that job back
+  to the normal priority when no item is left. Product drops do not depend on motivation, so a floor of 0 is
+  pure harvesting; a selected job on the blacklist is skipped.
   See [`docs/farming.md`](docs/farming.md).
 - **Silver/gold jobs** discovered on the map can be planned at their exact location with the real
   `job/job` values; the toggle is off by default and the autopilot does not scan the map itself.

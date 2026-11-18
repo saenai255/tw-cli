@@ -421,6 +421,8 @@ export function planAutopilot(input: PlanInput): Plan {
     only?: Set<number>,
   ): Candidate[] => {
     const list: Candidate[] = [];
+    // A fixed job duration is a hard filter: normal, silver/gold and farm candidates all obey it.
+    const durations: readonly DurationKey[] = cfg.jobs.duration === 'auto' ? DURATION_KEYS : [cfg.jobs.duration];
     const xpPerLevel = levelStartXp(level + 1, start.maxLevel) - levelStartXp(level, start.maxLevel);
     const refundPerXp = xpPerLevel > 0 ? start.maxEnergy / xpPerLevel : 0;
 
@@ -518,7 +520,7 @@ export function planAutopilot(input: PlanInput): Plan {
           [at, travel] = [position, time];
         }
       }
-      for (const duration of DURATION_KEYS) {
+      for (const duration of durations) {
         const values = job.values[duration];
         if (!values) {
           continue;
@@ -535,7 +537,7 @@ export function planAutopilot(input: PlanInput): Plan {
         continue;
       }
       const travel = wayTime(from, special.at);
-      for (const duration of DURATION_KEYS) {
+      for (const duration of durations) {
         const values = special.values[duration];
         if (!values) {
           continue;

@@ -3,7 +3,15 @@
 
 import { Box, Text, useInput } from 'ink';
 import React, { useEffect, useMemo, useState } from 'react';
-import type { AutopilotConfig, AutopilotRules, Goal, ModuleKey, PlannedTask } from '../game/autopilot-config.ts';
+import {
+  type AutopilotConfig,
+  type AutopilotRules,
+  type Goal,
+  JOB_DURATIONS,
+  type JobDuration,
+  type ModuleKey,
+  type PlannedTask,
+} from '../game/autopilot-config.ts';
 import { BLACKSMITH_JOBS, farmProduct } from '../game/farm.ts';
 import type { GameState, JobOption } from '../game/state.ts';
 import type { ProjectedStep, Timeline } from '../game/timeline.ts';
@@ -57,6 +65,14 @@ type Row =
       min: number;
       max: number;
       format: (value: number) => string;
+    }
+  | {
+      kind: 'choice';
+      label: string;
+      options: readonly JobDuration[];
+      labels: readonly string[];
+      get: (configValue: AutopilotConfig) => JobDuration;
+      set: (configValue: AutopilotConfig, value: JobDuration) => void;
     };
 
 const percent = (value: number) => `${Math.round(value * 100)}%`;
@@ -114,6 +130,14 @@ export const ROWS: [Row, ...Row[]] = [
     set: (configValue, flag) => (configValue.per = flag ? 'time' : 'energy'),
   },
   moduleToggle('jobs', 'Queue jobs'),
+  {
+    kind: 'choice',
+    label: 'job duration',
+    options: JOB_DURATIONS,
+    labels: ['auto (planner picks)', '15 s', '10 min', '1 h'],
+    get: (configValue) => configValue.jobs.duration,
+    set: (configValue, value) => (configValue.jobs.duration = value),
+  },
   subToggle((configValue) => configValue.jobs, 'special', 'use discovered silver & gold jobs'),
   numberSetting(
     (configValue) => configValue.jobs,
@@ -436,6 +460,14 @@ export function AutopilotScreen({ state, width, height, onCapture, onExit, activ
           ),
         );
       }
+      if (current.kind === 'choice' && (key.leftArrow || key.rightArrow || input === '+' || input === '-')) {
+        const direction = key.rightArrow || input === '+' ? 1 : -1;
+        const from = current.options.indexOf(current.get(config));
+        const value = current.options[(from + direction + current.options.length) % current.options.length];
+        if (value) {
+          return edit((configValue) => current.set(configValue, value));
+        }
+      }
     },
     { isActive: active && !expanded },
   );
@@ -523,6 +555,15 @@ export function AutopilotScreen({ state, width, height, onCapture, onExit, activ
           Text,
           { key: countValue, inverse: inv, wrap: 'truncate' },
           `     ${result.label}: ${result.format(result.get(config))}`,
+        );
+      }
+      if (result.kind === 'choice') {
+        const value = result.get(config);
+        const at = Math.max(0, result.options.indexOf(value));
+        return createElement(
+          Text,
+          { key: countValue, inverse: inv, wrap: 'truncate' },
+          `     ${result.label}: ${result.labels[at] ?? value}`,
         );
       }
       const soon =

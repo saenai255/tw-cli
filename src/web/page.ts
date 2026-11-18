@@ -3,13 +3,22 @@ const esc = (text: string) => text.replace(/[&<>"']/g, (character) => `&#${chara
 
 export function page({
   token,
-  world,
+  worlds,
+  currentUrl,
   existingFp,
 }: {
   token: string;
-  world: string;
+  /** Selectable worlds; the current env-configured one is added with id 0 when it is not in the list. */
+  worlds: { id: number; name: string; url: string }[];
+  currentUrl: string;
   existingFp: string | null;
 }): string {
+  const options = worlds
+    .map(
+      (world) =>
+        `<option value="${world.id}"${world.url === currentUrl ? ' selected' : ''}>${esc(world.name)} · ${esc(new URL(world.url).host)}</option>`,
+    )
+    .join('\n');
   return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>tw-cli setup</title>
@@ -20,7 +29,7 @@ export function page({
 main{max-width:640px;margin:0 auto}h1{font-size:22px;margin:0 0 4px}p.sub{color:var(--mut);margin:0 0 20px}
 section{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:18px 20px;margin-bottom:16px}
 h2{font-size:16px;margin:0 0 8px}code,.mono{font:13px ui-monospace,SFMono-Regular,Menlo,monospace}
-label{display:block;font-size:13px;color:var(--mut);margin:10px 0 4px}input{width:100%;padding:9px 10px;border:1px solid var(--line);border-radius:7px;background:transparent;color:var(--ink);font:inherit}
+label{display:block;font-size:13px;color:var(--mut);margin:10px 0 4px}input,select{width:100%;padding:9px 10px;border:1px solid var(--line);border-radius:7px;background:transparent;color:var(--ink);font:inherit}
 button{margin-top:14px;padding:9px 16px;border:0;border-radius:7px;background:var(--acc);color:#fff;font:inherit;font-weight:600;cursor:pointer}button:disabled{opacity:.5;cursor:default}
 .status{margin-top:10px;font-size:14px}.ok{color:var(--ok)}.bad{color:var(--bad)}.mut{color:var(--mut)}
 dl{display:grid;grid-template-columns:auto 1fr;gap:2px 12px;margin:8px 0 0;font-size:13px}dt{color:var(--mut)}dd{margin:0;overflow-wrap:anywhere}
@@ -40,8 +49,9 @@ Use the browser you normally play in, so the CLI reports the same device.</p>
 
 <section>
 <h2>2 · Log in</h2>
-<p class="mut">World <code>${esc(world)}</code>. Your password goes only to the tw-cli process; it is not stored.</p>
+<p class="mut">All .net worlds. Your password goes only to the tw-cli process; it is not stored.</p>
 <form id="login" autocomplete="on">
+<label for="world">World</label><select id="world" name="world" required>${options}</select>
 <label for="name">Account name</label><input id="name" name="username" autocomplete="username" required>
 <label for="password">Password</label><input id="password" name="password" type="password" autocomplete="current-password" required>
 <button type="submit" id="loginBtn">Log in</button>
@@ -83,7 +93,7 @@ Use the browser you normally play in, so the CLI reports the same device.</p>
   });
   byId('login').addEventListener('submit',function(event){
     event.preventDefault();byId('loginBtn').disabled=true;status('loginStatus','mut','Logging in… (requests are paced, this takes a few seconds)');
-    post('/api/login',{name:byId('name').value,password:byId('password').value}).then(function(json){
+    post('/api/login',{name:byId('name').value,password:byId('password').value,world:Number(byId('world').value)}).then(function(json){
       byId('password').value='';
       status('loginStatus','ok','Logged in as '+json.name+' (level '+json.level+') on '+json.world+'. Session saved. You can close this page and run: tw');
     }).catch(function(error){status('loginStatus','bad',error.message);}).then(function(){byId('loginBtn').disabled=false;});

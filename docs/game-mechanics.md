@@ -3,6 +3,22 @@
 What tw-cli relies on about The West, with where it comes from. **Verified** = seen in live replies or the
 browser client's code; **unverified** = assumed, check live and update this file.
 
+## Portal and worlds
+
+- The `.net` portal is `https://www.the-west.net`. Its home page carries the world list as the second argument
+  of `WestMaster.init`: `world_id`, `name`, `start_date`, `player_count`, `register`, `login`. Verified 2026-11-18.
+- `POST /index.php?ajax=check_login&locale=en_DK` (name, password) → `player_id`, `password` (the login token)
+  and `playerWorlds` keyed by portal world id (e.g. `{38: [38, 1]}`). The locale is the portal's (`en_DK` on
+  `.net`, even for the English pages).
+- `POST /index.php?action=login` (world_id, player_id, password, set_cookie=1) redirects to
+  `https://enNN.the-west.net/game.php?sid=…`. A world the account cannot enter answers 200 with the portal page
+  instead of a redirect.
+- **Portal world ids are not host numbers**: Arizona 18 → `en13`, …, Quebec 38 → `en32`. Checked from each host's
+  unauthenticated `game.php` redirect (`…?action=relog&world_id=…`, 2026-11-18). The snapshot (including the
+  temporarily closed Halloween Speed 23 → en18 and Shorts #3 31 → en24) is hardcoded in `src/auth/worlds.ts`;
+  refresh it from the portal list and those relog redirects when worlds open or close.
+- Sessions are saved per game origin (`session.json`); `world.json` holds the world picked last.
+
 ## Time, energy, health
 
 - Server time: `Game.init.sincepoch`, refined by `POST /ntp.php` (epoch ms). `ServerClock` in `clock.ts`.
