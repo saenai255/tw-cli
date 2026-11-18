@@ -2,6 +2,7 @@
 //  1. GET  https://www.the-west.net/            sets the cookies the login form expects
 //  2. POST /index.php?ajax=check_login&locale=  name+password → player_id, login token, playerWorlds
 //  3. POST /index.php?action=login              world_id, player_id, token → redirect to game.php?sid=…
+//     A world the account cannot enter answers 200 with the portal page, not a redirect; other worlds are tried.
 //  4. GET  that URL, following redirects        sets the world's session cookies
 // then openGame(): GET game.php → Player.init h + state, and record_fp like the page's fp-script.
 
@@ -90,15 +91,44 @@ async function checkLogin(
   return { playerId, token: data.password, worlds };
 }
 
-async function gameUrlFrom(response: Response, baseUrl: string): Promise<string | null> {
+interface GameUrl {
+  url: string | null;
+  status: number;
+  /** A short, token-free description of the page when it had no game URL. */
+  snippet: string;
+}
+
+async function gameUrlFrom(response: Response, requestUrl: string, worldUrl: string): Promise<GameUrl> {
   const location = response.headers.get('location');
   if (location) {
     await response.body?.cancel().catch(() => {});
-    return new URL(location, baseUrl).href;
+    return { url: new URL(location, requestUrl).href, status: response.status, snippet: '' };
   }
-  const match = /https?:\/\/[a-z0-9.-]+\/game\.php\?[^"'\s<>]*sid=[^"'\s<>]+/i.exec(await response.text());
-  return match ? match[0].replace(/&amp;/g, '&') : null;
+  const text = await response.text();
+  // The portal has returned both relative and JSON-escaped game URLs. Prefer the game host as the base for a
+  // relative one: an interstitial served by the portal still names a page on the world.
+  const match = /game\.php\?[^"'\s<>]*sid=[^"'\s<>]+/i.exec(text.replace(/\\\//g, '/'));
+  // The login form is what a rejected token gets; its visible navigation text is not a useful error.
+  const startPage = /id=["']?(?:loginForm|selectWorld)\b|Auth\.checkLogin/i.test(text);
+  const visible = startPage
+    ? 'the portal start page (login token not accepted)'
+    : text
+        .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+        .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+        .replace(/<title[^>]*>([\s\S]*?)<\/title>/gi, ' $1 ')
+        .replace(/<[^>]*>/g, ' ')
+        .replace(/\b[0-9a-f]{32,}\b/gi, '[token]')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .slice(0, 160);
+  return {
+    url: match ? new URL(match[0].replace(/&amp;/g, '&'), worldUrl).href : null,
+    status: response.status,
+    snippet: visible,
+  };
 }
+
+type EnterWorld = { entered: true } | { entered: false; detail?: string };
 
 async function enterWorld(
   world: WorldConfig,
@@ -107,7 +137,7 @@ async function enterWorld(
   account: Account,
   portalWorldId: number,
   policy: HostPolicy,
-): Promise<boolean> {
+): Promise<EnterWorld> {
   const portal = portalUrl(world.url);
   const worldHost = new URL(world.url).host;
   const response = await send(
@@ -127,24 +157,27 @@ async function enterWorld(
     },
     policy,
   );
-  let url = await gameUrlFrom(response, `${portal}/index.php`);
-  if (!url) {
-    throw new AuthError('Login did not lead to the game');
+  const game = await gameUrlFrom(response, `${portal}/index.php`, world.url);
+  if (!game.url) {
+    return {
+      entered: false,
+      detail: `world ${portalWorldId}: HTTP ${game.status}${game.snippet ? ` — ${game.snippet}` : ''}`,
+    };
   }
-  if (new URL(url).host !== worldHost) {
-    return false;
+  if (new URL(game.url).host !== worldHost) {
+    return { entered: false };
   }
 
   for (let hop = 0; hop < MAX_REDIRECTS; hop++) {
-    const redirect = await send(jar, identity, url, { referer: `${portal}/` }, policy);
+    const redirect = await send(jar, identity, game.url, { referer: `${portal}/` }, policy);
     const location = redirect.headers.get('location');
     await redirect.body?.cancel().catch(() => {});
     if (!isRedirect(redirect.status) || !location) {
-      return true;
+      return { entered: true };
     }
-    url = new URL(location, url).href;
-    if (new URL(url).host !== worldHost) {
-      throw new AuthError(`Game sent the login back to ${new URL(url).host}: login failed`);
+    game.url = new URL(location, game.url).href;
+    if (new URL(game.url).host !== worldHost) {
+      throw new AuthError(`Game sent the login back to ${new URL(game.url).host}: login failed`);
     }
   }
   throw new AuthError('Too many redirects while entering the game');
@@ -163,11 +196,20 @@ export async function loginToWorld(
   await portalPage.body?.cancel().catch(() => {});
 
   const account = await checkLogin(world, credentials, jar, identity, policy);
-  // One at a time: each attempt rewrites the jar's session cookies.
+  // One at a time: each attempt rewrites the jar's session cookies. A world that answers with a portal page
+  // (closed, inaccessible, or simply not this account's) must not stop the others from being tried.
+  const failures: string[] = [];
   for (const worldId of account.worlds) {
-    if (await enterWorld(world, jar, identity, account, worldId, policy)) {
+    const attempt = await enterWorld(world, jar, identity, account, worldId, policy);
+    if (attempt.entered) {
       return jar;
     }
+    if (attempt.detail) {
+      failures.push(attempt.detail);
+    }
+  }
+  if (failures.length) {
+    throw new AuthError(`Login did not lead to the game (${failures.join('; ')})`);
   }
   throw new AuthError(`This account has no character on ${new URL(world.url).host}`);
 }

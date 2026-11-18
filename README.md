@@ -90,12 +90,15 @@ part is a toggle with safe defaults, and the plan pane says what it will do next
   Reward values follow the game's 25 % motivation breakpoints, and each run's motivation loss is tracked. It
   stays at the current spot unless another is 20 % better, and a server-full queue is waited out, not retried
   job by job. When the game page has no position yet it waits for one instead of planning from the map origin.
+- **Blacklist** jobs you never want queued (`g a` → `job blacklist`): `/` filters by job or product, `Space`
+  excludes or includes. It covers normal jobs, discovered silver/gold variants and the farm; `d` in the `Q`
+  queue view is a shortcut and `u` there clears the list. A task already on the server runs out; `c` cancels it.
 - **Farm selected jobs** round-robin (`g a` → Farm, off by default): pick 5–10 jobs in the picker (`Space`
   chooses, `/` filters by job or product, `J K` sets the order, `P` loads the eight early blacksmith-product
   jobs). It takes each job's best duration per energy, uses a motivation item when the next job reaches the
   floor (50 % by default), and drops that job back to the normal priority when no item is left. Product drops
-  do not depend on motivation, so a floor of 0 is pure harvesting; see
-  [`docs/farming.md`](docs/farming.md).
+  do not depend on motivation, so a floor of 0 is pure harvesting; a selected job on the blacklist is skipped.
+  See [`docs/farming.md`](docs/farming.md).
 - **Silver/gold jobs** discovered on the map can be planned at their exact location with the real
   `job/job` values; the toggle is off by default and the autopilot does not scan the map itself.
 - **Sleep** when out of energy or low on HP, and wakes early once energy is enough to level up or for the next

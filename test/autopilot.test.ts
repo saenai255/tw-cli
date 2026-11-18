@@ -117,6 +117,7 @@ test('autopilot file: defaults, merge of saved values, ranking repaired, bad inp
   );
   const empty = parseAutopilotFile(null);
   assert.deepEqual(empty.config, DEFAULT_CONFIG);
+  assert.deepEqual(empty.rules.excludedJobs, []);
   assert.equal(empty.plan, null);
   const autopilotFile = parseAutopilotFile({
     config: {
@@ -127,7 +128,7 @@ test('autopilot file: defaults, merge of saved values, ranking repaired, bad inp
       farm: { jobs: [5, 'x', 5, -1, 10.5, 25], floor: 5 },
       unknown: 1,
     },
-    rules: { excludedJobs: [5] },
+    rules: { excludedJobs: [5, 'x', 5, -1, 10.5, 25] },
     plan: { fingerprint: 'abc', savedAt: 7, tasks: [] },
   });
   assert.equal(autopilotFile.config.running, true);
@@ -138,7 +139,7 @@ test('autopilot file: defaults, merge of saved values, ranking repaired, bad inp
   assert.equal(autopilotFile.config.modules.farm, true);
   assert.deepEqual(autopilotFile.config.farm, { jobs: [5, 25], floor: 1, items: true });
   assert.equal('unknown' in autopilotFile.config, false);
-  assert.deepEqual(autopilotFile.rules.excludedJobs, [5]);
+  assert.deepEqual(autopilotFile.rules.excludedJobs, [5, 25]);
   assert.equal(autopilotFile.plan?.fingerprint, 'abc');
   assert.deepEqual(goalWeights(autopilotFile.config), {
     xp: 1,
@@ -172,7 +173,7 @@ test('autopilot file: defaults, merge of saved values, ranking repaired, bad inp
   }
 });
 
-test('autopilot screen: toggles, values and ranking change the saved config; queue projection shown', async () => {
+test('autopilot screen: toggles, values, ranking, blacklist and farm pickers change saved settings; queue projection shown', async () => {
   const React = (await import('react')).default;
   const { render } = await import('ink');
   const { PassThrough } = await import('node:stream');
@@ -274,8 +275,22 @@ test('autopilot screen: toggles, values and ranking change the saved config; que
     app.rerender(el());
     await settle();
     assert.match(plain(), /● running/);
+    // Job blacklist picker: open, exclude a job, close.
+    await keys('j', 'j', 'j', ' ');
+    assert.match(plain(), /Job blacklist {2}0 excluded/);
+    await keys(' ');
+    assert.deepEqual(state.autopilot.rules.excludedJobs, [5]);
+    await keys(' ');
+    assert.deepEqual(state.autopilot.rules.excludedJobs, []);
+    await keys(' ');
+    assert.deepEqual(state.autopilot.rules.excludedJobs, [5]);
+    app.rerender(el());
+    await settle();
+    assert.match(plain(), /Job blacklist {2}1 excluded/);
+    await keys('\x1b');
+    assert.match(plain(), /job blacklist: 1 excluded/);
     // Down to "below" (HP sleep threshold) and raise it by 5 %.
-    for (let index = 0; index < 14; index++) {
+    for (let index = 0; index < 12; index++) {
       await keys('j');
     }
     await keys('+');
@@ -286,8 +301,8 @@ test('autopilot screen: toggles, values and ranking change the saved config; que
     }
     await keys(' ');
     assert.match(plain(), /Farm jobs {2}0 selected/);
-    await keys(' ');
-    assert.deepEqual(state.autopilot.config.farm.jobs, [5]);
+    await keys('j', ' ');
+    assert.deepEqual(state.autopilot.config.farm.jobs, [25]);
     await keys('P');
     app.rerender(el());
     await settle();
@@ -731,7 +746,7 @@ test('planner: plans to the 6 h horizon (jobs of any length cover the same time)
   assert.equal(ins.tasks[index]!.step.kind, 'sleep');
 });
 
-test('queue view (Q): queued + planned rows; d excludes a planned job, s inserts a sleep, c cancels a queued task', async () => {
+test('queue view (Q): queued + planned rows; d blacklists a planned job, u clears it, s inserts a sleep, c cancels a queued task', async () => {
   const React = (await import('react')).default;
   const { render } = await import('ink');
   const { PassThrough } = await import('node:stream');
@@ -804,6 +819,8 @@ test('queue view (Q): queued + planned rows; d excludes a planned job, s inserts
     assert.equal(captured, true, 'global keys are held off while open');
     await keys('j', 'd');
     assert.deepEqual(state.autopilot.rules.excludedJobs, [5]);
+    await keys('u');
+    assert.deepEqual(state.autopilot.rules.excludedJobs, []);
     await keys('s');
     assert.equal(state.autopilot.rules.inserts[0]?.kind, 'sleep');
     await keys('k', 'c', 'y');

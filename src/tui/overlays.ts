@@ -174,9 +174,10 @@ const SHORTCUTS: Record<Mode | 'global', [string, string][]> = {
   ],
   autopilot: [
     ['↑ ↓  j k', 'move'],
-    ['Space  Enter', 'toggle a module or setting'],
+    ['Space  Enter', 'toggle a setting, or open the farm / blacklist picker'],
     ['← →  + -', 'change a value'],
     ['J K', '(priority) move the goal down / up'],
+    ['Q', 'queue & plan view (c cancel, d blacklist, u clear blacklist, s/b insert)'],
     ['R', 'run / pause the autopilot'],
     ['X', 'stop: pause and clear the planned tasks (rules stay)'],
     ['Esc', 'back'],

@@ -513,7 +513,7 @@ export class AutopilotRunner {
         motivation: jobInfo.motivation,
         danger: jobInfo.danger,
         doable: isDoable(jobInfo),
-        excluded: input.rules.excludedJobs.includes(jobInfo.id) || undefined,
+        blacklisted: input.rules.excludedJobs.includes(jobInfo.id) || undefined,
         locations: locations(jobInfo.groupid)?.length ?? 0,
         values: valuesOf(jobInfo.values),
       })),

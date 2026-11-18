@@ -3,7 +3,7 @@
 
 import { Box, Text, useInput } from 'ink';
 import React, { useEffect, useMemo, useState } from 'react';
-import type { AutopilotConfig, Goal, ModuleKey, PlannedTask } from '../game/autopilot-config.ts';
+import type { AutopilotConfig, AutopilotRules, Goal, ModuleKey, PlannedTask } from '../game/autopilot-config.ts';
 import { BLACKSMITH_JOBS, farmProduct } from '../game/farm.ts';
 import type { GameState, JobOption } from '../game/state.ts';
 import type { ProjectedStep, Timeline } from '../game/timeline.ts';
@@ -39,6 +39,7 @@ type Row =
   | { kind: 'goal'; rank: number }
   | { kind: 'scope' }
   | { kind: 'farmJobs' }
+  | { kind: 'blacklist' }
   | {
       kind: 'toggle';
       label: string;
@@ -123,6 +124,7 @@ export const ROWS: [Row, ...Row[]] = [
     0.5,
     percent,
   ),
+  { kind: 'blacklist' },
   moduleToggle('farm', 'Farm selected jobs (round-robin)'),
   { kind: 'farmJobs' },
   numberSetting((configValue) => configValue.farm, 'floor', 'stop farming below motivation', 0.05, 0, 1, percent),
@@ -228,7 +230,7 @@ const selectable = (result: Row | undefined) => !!result && result.kind !== 'hea
 export function AutopilotScreen({ state, width, height, onCapture, onExit, active = true }: ScreenProps) {
   const [selected, setSelected] = useState(1);
   const [expanded, setExpanded] = useState(false);
-  const [picking, setPicking] = useState(false);
+  const [picker, setPicker] = useState<'farm' | 'blacklist' | null>(null);
   const [pickFilter, setPickFilter] = useState('');
   const [pickFiltering, setPickFiltering] = useState(false);
   const [pickSelected, setPickSelected] = useState(0);
@@ -244,9 +246,11 @@ export function AutopilotScreen({ state, width, height, onCapture, onExit, activ
   };
   const edit = (fn: (configValue: AutopilotConfig) => void) =>
     state.updateAutopilot((autopilotFile) => fn(autopilotFile.config));
+  const editRules = (fn: (rules: AutopilotRules) => void) =>
+    state.updateAutopilot((autopilotFile) => fn(autopilotFile.rules));
   // The picker is one line per job even when a discovered special adds a second location for it.
   const pickOptions = useMemo(() => {
-    if (!picking) {
+    if (!picker) {
       return [];
     }
     const seen = new Set<number>();
@@ -259,7 +263,7 @@ export function AutopilotScreen({ state, width, height, onCapture, onExit, activ
     });
   }, [
     state,
-    picking,
+    picker,
     pickFilter,
     state.jobsVersion,
     state.specialVersion,
@@ -276,6 +280,15 @@ export function AutopilotScreen({ state, width, height, onCapture, onExit, activ
         configValue.farm.jobs.splice(at, 1);
       } else {
         configValue.farm.jobs.push(jobId);
+      }
+    });
+  const toggleExcludedJob = (jobId: number) =>
+    editRules((rules) => {
+      const at = rules.excludedJobs.indexOf(jobId);
+      if (at >= 0) {
+        rules.excludedJobs.splice(at, 1);
+      } else {
+        rules.excludedJobs.push(jobId);
       }
     });
   const moveFarmJob = (jobId: number, direction: 1 | -1) =>
@@ -298,16 +311,16 @@ export function AutopilotScreen({ state, width, height, onCapture, onExit, activ
     state.info(`Blacksmith farm preset loaded: ${BLACKSMITH_JOBS.length} jobs.`);
   };
   useEffect(() => {
-    if (!picking) {
+    if (!picker) {
       return;
     }
     onCapture(true);
     return () => onCapture(false);
-  }, [picking, onCapture]);
+  }, [picker, onCapture]);
 
   useInput(
     (input, key) => {
-      if (picking) {
+      if (picker) {
         if (pickFiltering) {
           if (key.return || key.escape) {
             setPickFiltering(false);
@@ -325,7 +338,7 @@ export function AutopilotScreen({ state, width, height, onCapture, onExit, activ
           return;
         }
         if (key.escape) {
-          return setPicking(false);
+          return setPicker(null);
         }
         if (input === '/') {
           return setPickFiltering(true);
@@ -344,12 +357,12 @@ export function AutopilotScreen({ state, width, height, onCapture, onExit, activ
         }
         const option = pickOptions[pickIndex];
         if (option && (input === ' ' || key.return)) {
-          return toggleFarmJob(option.job.id);
+          return picker === 'farm' ? toggleFarmJob(option.job.id) : toggleExcludedJob(option.job.id);
         }
-        if (input === 'P') {
+        if (picker === 'farm' && input === 'P') {
           return loadBlacksmithPreset();
         }
-        if (option && (input === 'J' || input === 'K')) {
+        if (picker === 'farm' && option && (input === 'J' || input === 'K')) {
           return moveFarmJob(option.job.id, input === 'J' ? 1 : -1);
         }
         return;
@@ -398,7 +411,14 @@ export function AutopilotScreen({ state, width, height, onCapture, onExit, activ
         return state.updateAutopilot((autopilotFile) => (autopilotFile.rules.onlyQuests = []));
       }
       if (current.kind === 'farmJobs' && (input === ' ' || key.return)) {
-        setPicking(true);
+        setPicker('farm');
+        setPickFilter('');
+        setPickFiltering(false);
+        setPickSelected(0);
+        return;
+      }
+      if (current.kind === 'blacklist' && (input === ' ' || key.return)) {
+        setPicker('blacklist');
         setPickFilter('');
         setPickFiltering(false);
         setPickSelected(0);
@@ -420,8 +440,8 @@ export function AutopilotScreen({ state, width, height, onCapture, onExit, activ
     { isActive: active && !expanded },
   );
 
-  if (picking) {
-    return createElement(FarmPicker, {
+  if (picker) {
+    return createElement(JobPicker, {
       state,
       width,
       height,
@@ -429,7 +449,8 @@ export function AutopilotScreen({ state, width, height, onCapture, onExit, activ
       selected: pickIndex,
       filter: pickFilter,
       filtering: pickFiltering,
-      farmJobs: config.farm.jobs,
+      mode: picker,
+      chosen: picker === 'farm' ? config.farm.jobs : state.autopilot.rules.excludedJobs,
     });
   }
 
@@ -477,6 +498,18 @@ export function AutopilotScreen({ state, width, height, onCapture, onExit, activ
           `     farm jobs: ${jobs.length ? `${jobs.length} selected (${names}${jobs.length > 4 ? '…' : ''})` : 'none'} · Space to choose`,
         );
       }
+      if (result.kind === 'blacklist') {
+        const jobs = state.autopilot.rules.excludedJobs;
+        const names = jobs
+          .slice(0, 4)
+          .map((jobId) => state.jobs.find((job) => job.id === jobId)?.name ?? `#${jobId}`)
+          .join(', ');
+        return createElement(
+          Text,
+          { key: countValue, inverse: inv, wrap: 'truncate' },
+          `     job blacklist: ${jobs.length ? `${jobs.length} excluded (${names}${jobs.length > 4 ? '…' : ''})` : 'none'} · Space to choose`,
+        );
+      }
       if (result.kind === 'goal') {
         const priority = config.priority[result.rank];
         return createElement(
@@ -507,8 +540,8 @@ export function AutopilotScreen({ state, width, height, onCapture, onExit, activ
   return createElement(Box, { width, height }, left, createElement(PlanPane, { state, width: rightW, height }));
 }
 
-/** Full-screen job picker for the farm list: one row per job, selection order shown, product names for filtering. */
-function FarmPicker(props: {
+/** Full-screen job picker: farm order or the blacklist, one row per job, product names for filtering. */
+function JobPicker(props: {
   state: GameState;
   width: number;
   height: number;
@@ -516,26 +549,34 @@ function FarmPicker(props: {
   selected: number;
   filter: string;
   filtering: boolean;
-  farmJobs: number[];
+  mode: 'farm' | 'blacklist';
+  chosen: number[];
 }) {
-  const { state, width, height, options, selected, filter, filtering, farmJobs } = props;
+  const { state, width, height, options, selected, filter, filtering, mode, chosen } = props;
   const [start, end] = scrollWindow(selected, options.length, Math.max(3, height - 4));
-  const title = filtering ? `Farm jobs  /${filter}▏` : filter ? `Farm jobs  (filter: ${filter})` : 'Farm jobs';
+  const title = mode === 'farm' ? 'Farm jobs' : 'Job blacklist';
+  const heading = filtering ? `${title}  /${filter}▏` : filter ? `${title}  (filter: ${filter})` : title;
+  const count = mode === 'farm' ? `${chosen.length} selected` : `${chosen.length} excluded`;
+  const blacklisted = new Set(state.autopilot.rules.excludedJobs);
   const productWidth = Math.max(12, Math.floor(width * 0.35));
   const nameWidth = Math.max(8, width - productWidth - 20);
   return createElement(
     Box,
     { flexDirection: 'column', borderStyle: 'round', borderColor: 'cyan', width, height, paddingX: 1 },
-    createElement(Text, { bold: true, wrap: 'truncate' }, `${title}  ${farmJobs.length} selected`),
+    createElement(Text, { bold: true, wrap: 'truncate' }, `${heading}  ${count}`),
     createElement(
       Text,
       { dimColor: true, wrap: 'truncate' },
-      'Space select · J K reorder · P blacksmith preset · / filter · Esc back',
+      mode === 'farm'
+        ? 'Space select · J K reorder · P blacksmith preset · / filter · Esc back'
+        : 'Space exclude / include · / filter · Esc back',
     ),
     ...options.slice(start, end).map((option, offset) => {
       const optionIndex = start + offset;
       const selectedRow = optionIndex === selected;
-      const order = farmJobs.indexOf(option.job.id);
+      const isBlacklisted = blacklisted.has(option.job.id);
+      const order = mode === 'farm' ? chosen.indexOf(option.job.id) : -1;
+      const marked = mode === 'farm' ? order >= 0 : isBlacklisted;
       const products = state
         .jobProducts(option.job, state.jobValues(option))
         .map((product) => product.name)
@@ -546,15 +587,16 @@ function FarmPicker(props: {
         defined({
           key: `${option.job.id}:${option.at?.x ?? 0},${option.at?.y ?? 0}`,
           inverse: selectedRow,
-          color: order >= 0 ? 'green' : doable ? undefined : 'gray',
+          color: marked ? (mode === 'farm' ? 'green' : 'red') : doable ? undefined : 'gray',
           wrap: 'truncate',
         }),
-        `${order >= 0 ? `[${order + 1}]` : '[ ]'} `,
+        `${mode === 'farm' ? (order >= 0 ? `[${order + 1}]` : '[ ]') : isBlacklisted ? '[x]' : '[ ]'} `,
         truncate(option.job.name, nameWidth).padEnd(nameWidth),
         ` ${truncate(products || '—', productWidth).padEnd(productWidth)}`,
         ` LP ${option.job.laborPoints}`.padStart(7),
         ` lvl ${option.job.level}`.padStart(7),
         option.special ? ` · ${option.special}` : '',
+        mode === 'farm' && isBlacklisted ? ' · blacklisted' : '',
       );
     }),
     options.length === 0
@@ -834,7 +876,7 @@ function PlanPane({ state, width, height }: { state: GameState; width: number; h
     createElement(
       Text,
       { dimColor: true, wrap: 'truncate' },
-      'Space toggle · ← → value · J K rank · Q queue · R run/pause · X stop · Esc back',
+      'Space toggle / choose · ← → value · J K rank · Q queue · R run/pause · X stop · Esc back',
     ),
   );
 }
@@ -918,11 +960,11 @@ function QueueView({
           (autopilotFile) =>
             (autopilotFile.rules.excludedJobs = [...new Set([...autopilotFile.rules.excludedJobs, jobId])]),
         );
-        return state.info(`Autopilot: ${task.step.title} excluded from plans (u in the queue view clears exclusions).`);
+        return state.info(`Autopilot: ${task.step.title} blacklisted (edit it on g a; u here clears the blacklist).`);
       }
       if (input === 'u' && rules.excludedJobs.length) {
         state.updateAutopilot((autopilotFile) => (autopilotFile.rules.excludedJobs = []));
-        return state.info('Autopilot: job exclusions cleared.');
+        return state.info('Autopilot: job blacklist cleared.');
       }
       if (input === 's' || input === 'b') {
         const at = Math.max(now, row.depart);
@@ -984,7 +1026,7 @@ function QueueView({
       : createElement(
           Text,
           { dimColor: true, wrap: 'truncate' },
-          `c cancel (queued) · d exclude job / remove insert · s b insert sleep / bank here · J K move insert · ${rules.excludedJobs.length ? `u clear ${rules.excludedJobs.length} exclusion(s) · ` : ''}Esc back`,
+          `c cancel (queued) · d blacklist job / remove insert · s b insert sleep / bank here · J K move insert · ${rules.excludedJobs.length ? `u clear ${rules.excludedJobs.length} blacklisted · ` : ''}Esc back`,
         );
   return createElement(
     Box,

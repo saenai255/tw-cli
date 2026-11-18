@@ -921,6 +921,32 @@ test('S6 the job that drops it is not doable yet: buy', () => {
   assert.deepEqual(trips(state), [[3, 60, ['2× Jug of water (general store) for "Q1"']]]);
 });
 
+test('S6b a blacklisted job does not count as a source: buy', () => {
+  const state = makeState();
+  withJob(state, true);
+  state.autopilot.rules.excludedJobs = [7];
+  state.quests = [quest(1, [has(JUG, 2)])];
+  sells(state, 3, [JUG]);
+  assert.deepEqual(trips(state), [[3, 60, ['2× Jug of water (general store) for "Q1"']]]);
+});
+
+test('S6c buying off and the only source is blacklisted: the blocker says so', () => {
+  const state = makeState();
+  withJob(state, true);
+  state.autopilot.rules.excludedJobs = [7];
+  state.autopilot.config.quests.buy = false;
+  state.quests = [quest(1, [has(JUG, 2)])];
+  assert.equal(state.questBlocker(state.quests[0]!), 'Jug of water 0/2: only blacklisted jobs drop it');
+});
+
+test('S6d a blacklisted job requirement is a blocker', () => {
+  const state = makeState();
+  withJob(state, true);
+  state.autopilot.rules.excludedJobs = [7];
+  state.quests = [quest(1, [{ solved: false, info: 'Fetch water (0/4)', jobId: 7, kind: 'job' }])];
+  assert.equal(state.questBlocker(state.quests[0]!), 'Fetch water (0/4): job is blacklisted');
+});
+
 test('S7 an item to wear that you lack: bought at the tailor (the wear step does the rest)', () => {
   const state = makeState();
   state.quests = [quest(1, [wears(300)])];

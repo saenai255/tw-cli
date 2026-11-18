@@ -44,4 +44,5 @@ job or all is unverified.
 
 `g a` → `farm jobs` → `Space` opens the picker. `/` filters by job or product name, `Space` adds/removes in
 round-robin order, `J K` moves the selected job, `P` loads the blacksmith preset, `Esc` closes. The selection is
-saved in `autopilot.json` per account; multiple instances need no coordination.
+saved in `autopilot.json` per account; multiple instances need no coordination. A selected job that is on the
+autopilot's job blacklist is skipped.

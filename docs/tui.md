@@ -56,7 +56,8 @@ Ink (React without JSX: `const h = React.createElement`). Shell in `src/tui/app.
 - **Autopilot** (`autopilot.ts`, `g a`): left the priority and module settings, right the plan pane. `Q` opens
   the queue view, `R` runs/pauses, `X` stops. On the `farm jobs` row, `Space` opens the farm job picker: `/`
   filters by job or product, `Space` adds/removes, `J K` sets the round-robin order, `P` loads the blacksmith
-  preset, `Esc` closes. The picker captures global keys while open.
+  preset, `Esc` closes. On the `job blacklist` row, `Space` opens the blacklist picker: `/` filters, `Space`
+  excludes/includes, `Esc` closes. Both pickers capture global keys while open.
 - **Debug** (`debug.ts`, mode `debug`, `g x`): left the debug log (`state.debug`, newest followed at the bottom
   until you move up; `f` category, `/` title filter), right the selected entry's data as pretty JSON (`l`, then `j k`
   scroll). `Tab` switches to **Now**: `runner.context()` live, one line per field, lists one item per line.

@@ -25,10 +25,14 @@ screen (`g a`). Spec agreed with the user in a grill session ("Decisions").
 
 - `g a` opens the screen. `R` run/pause (paused still plans and shows "would do", sends nothing), `X` stop
   (pause + clear the plan; rules stay), `Space`/`Enter` toggle, `←→`/`+-` values, `J K` reorder priority.
+- **Job blacklist** (`rules.excludedJobs`, saved in `autopilot.json`): `Space` on the `job blacklist` row opens
+  the picker. `/` filters by job or product, `Space` excludes / includes, `Esc` closes. A blacklisted job is
+  never queued by any part of the autopilot: normal jobs, discovered silver/gold variants and the farm. A task
+  already on the server runs out (`c` in the queue view cancels it); the blacklist only stops new plans.
 - **Farm** (off): `Farm selected jobs` toggles it; `Space` on the `farm jobs` row opens the picker. There `/`
   filters by job or product name, `Space` adds/removes in round-robin order, `J K` moves the selected job,
   `P` loads the eight blacksmith-product jobs, `Esc` closes. The floor (50 %) and the motivation-item toggle
-  sit under the module. See "Products farm" below.
+  sit under the module. A selected farm job that is blacklisted is skipped. See "Products farm" below.
 - `use discovered silver & gold jobs` (off): plan specials the map has found at their exact location, with the
   real `job/job` values. It does not scan the map itself; see "Silver/gold jobs".
 - `switch spot only when better by` (20 %): stay at the queue-end location unless a job elsewhere scores clearly
@@ -37,8 +41,8 @@ screen (`g a`). Spec agreed with the user in a grill session ("Decisions").
   energy still needed to level up; `wait for a level-up up to` (1 h) is how close the level-up can be before it
   waits instead of using one. Price is not used for energy items (they are not regularly purchasable).
 - `Q` queue view: queued + planned rows (ETA, travel, energy, HP, XP, $, module). `c` cancel a queued task,
-  `d` exclude a planned job / remove an inserted row, `u` clear exclusions, `s`/`b` insert a sleep / bank stop at
-  a row's time, `J K` move an inserted row. It captures all keys while open (Esc closes).
+  `d` blacklist a planned job / remove an inserted row, `u` clear the blacklist, `s`/`b` insert a sleep / bank
+  stop at a row's time, `J K` move an inserted row. It captures all keys while open (Esc closes).
 - Quest screen route prompt: `a` = autopilot on, Quests first, limited to the route's quests (`rules.onlyQuests`;
   clear it with the "Quests goal" row).
 - Plan pane (right): status (running / dry run / paused "what it would do" / "waiting for the character
@@ -79,10 +83,10 @@ screen (`g a`). Spec agreed with the user in a grill session ("Decisions").
 
 - **Inputs**: character (server values), server queue (fixed steps; queued jobs cost no energy, their drops
   count toward needs; queued sleeps keep their room rates in `state.sleepRates`), jobs and locations (drops
-  blended with calibration), quest needs (`state.autopilotNeeds()`, below), hotels (home + nearest town, every
-  10 min, energy rate × calibrated room scale), named towns, bag consumables above the reserve, budget left
-  today, failing step keys, calibrated HP scale, the farm selection/floor/settings, and (when the toggle is on)
-  discovered silver/gold jobs with their real `job/job` values.
+  blended with calibration; minus the job blacklist), quest needs (`state.autopilotNeeds()`, below), hotels
+  (home + nearest town, every 10 min, energy rate × calibrated room scale), named towns, bag consumables above
+  the reserve, budget left today, failing step keys, calibrated HP scale, the farm selection/floor/settings,
+  and (when the toggle is on) discovered silver/gold jobs with their real `job/job` values.
 - **Position first**: the plan starts from `state.queueEnd`. When that is unknown (`Character.init.pos`/task
   coords were `(0,0)` and no live update or queued task has supplied a position yet), the runner does not
   replan or act and the pane says "waiting for the character position…". `(0,0)` is never used as the map
@@ -90,7 +94,9 @@ screen (`g a`). Spec agreed with the user in a grill session ("Decisions").
 - **Quests in scope** (`state.autopilotQuests()`): open quests (or the route's), minus excluded quests / chains,
   repeatables unless on, and quests it cannot finish (`questBlocker`: an item no doable job drops, you do not
   have and it cannot buy, a job you cannot do, or "Go to / Resolve / Accept / Lose against …") unless "also
-  quests it cannot finish" is on. A time window ("only available between 06:00 and 11:00") is not a blocker:
+  quests it cannot finish" is on. A blacklisted job does not count as a source: the item is bought when buying
+  is on, otherwise the quest is skipped (or reported as unfinishable). A time window ("only available between
+  06:00 and 11:00") is not a blocker:
   the items get collected and the quest is finished inside the window. Each need carries `weight` (1, up to 2 for a quest ending within 72 h; `questEnds` reads the
   `limited` date as UTC, unverified) and `xpPerUnit` / `moneyPerUnit` (the quests' rewards spread over the units
   they still need), added to the XP and Money goals.
@@ -198,9 +204,9 @@ It is for crafting materials and does not use shop sell price at all.
 - **Selection**: `config.farm.jobs` is an ordered list of job ids; the picker on `g a` edits it. `P` loads the
   blacksmith preset from `src/game/farm.ts`: Granite mining (25), Repair fences (23), Iron mining (85),
   Clearing the forest (55), Picking cotton (5), Tending sheep (10), Tanning deer skin (17), Coal mining (40) —
-  one job per product, in the order in `docs/farming.md`. Jobs that are not doable, excluded or have no drops
-  are skipped, as are runs that could take HP under the sleep threshold; discovered silver/gold variants of a
-  selected job are used when `use discovered silver & gold jobs` is on and they drop more.
+  one job per product, in the order in `docs/farming.md`. Jobs that are not doable, blacklisted or have no
+  drops are skipped, as are runs that could take HP under the sleep threshold; discovered silver/gold variants
+  of a selected job are used when `use discovered silver & gold jobs` is on and they drop more.
 - **Round-robin**: among eligible selected jobs it picks the one with the fewest runs already queued or planned,
   ties by list order. A replan therefore continues the cycle instead of restarting it, and every product gets
   its share.
@@ -291,7 +297,7 @@ town you stand in, use an item, buy quest items).
 | HP (sleep / item / skip risky jobs)                                                                               | built (danger → HP is a heuristic)                                                        |
 | Consumables (energy, health, motivation)                                                                          | built; uses what is in the bag (it never buys them)                                       |
 | Bank                                                                                                              | built                                                                                     |
-| Expanded queue + rules                                                                                            | built (planned jobs can only be excluded, not reordered; inserts can move)                |
+| Expanded queue + rules                                                                                            | built (planned jobs can only be blacklisted, not reordered; inserts can move)             |
 | Quests: finish, rewards, wear + restore, accept from saloons                                                      | built                                                                                     |
 | Quests: buy items no job drops (shops in reach, mobile trader, market + pickup trip), time windows                | built (remote shop reads of other towns and market buys from afar unverified)             |
 | Quests: "Resolve / Accept: X" (accept the quest it waits on), "Go to X" (map giver coordinates), "Lose against X" | **not built** (logged once and skipped); next, after a live look at saloon / map givers   |
@@ -316,8 +322,11 @@ single wait is short · queue slots cost 10 min (the TUI is not open 24/7) · ca
 own game · silver/gold jobs only when discovered by the normal map tile loads, real `job/job` values, toggle off
 by default, no scan · products are farmed by the Farm module: selected jobs in round-robin order, best duration
 per energy, 50 % floor with motivation items at most once per plan, below-floor jobs hidden from the normal score
-for the rest of the plan, then the normal priority; no sell-price product goal ·
-goals stay separate: Money = cash pay, Lucky finds = luck chance × max find value, none folded into another.
+for the rest of the plan, then the normal priority; no sell-price product goal · one job blacklist
+(`rules.excludedJobs`) shared by normal, silver/gold and farm jobs; a blacklisted job is not a quest source (buy
+it or skip the quest).
+
+Job goals stay separate: Money = cash pay, Lucky finds = luck chance × max find value, none folded into another.
 
 ## Unverified (check live, then move to docs/game-mechanics.md)
 

@@ -1181,7 +1181,7 @@ export function planAutopilot(input: PlanInput): Plan {
     first?.why ??
     (!mods.jobs && !mods.farm
       ? 'Queue jobs is off.'
-      : 'Nothing worth doing (no doable job, or everything is excluded).');
+      : 'Nothing worth doing (no doable job, or everything is blacklisted).');
   const walk = tl.steps.reduce(
     (accumulator, st) => accumulator + Math.max(0, Math.min(st.depart + st.travel, horizonEnd) - st.depart),
     0,

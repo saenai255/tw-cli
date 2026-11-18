@@ -63,7 +63,14 @@ let calls: Call[];
 let realFetch: typeof fetch;
 let dir: string;
 
-function fakeServers(opts: { gameAcceptsSid?: Set<string> } = {}) {
+function fakeServers(
+  opts: {
+    gameAcceptsSid?: Set<string>;
+    failWorlds?: Set<string>;
+    startPageWorlds?: Set<string>;
+    loginBody?: string;
+  } = {},
+) {
   const sessions = opts.gameAcceptsSid ?? new Set<string>();
   let sidN = 0;
   globalThis.fetch = (async (input: string | URL, init: RequestInit = {}) => {
@@ -93,8 +100,18 @@ function fakeServers(opts: { gameAcceptsSid?: Set<string> } = {}) {
       return Response.json({ player_id: 42, password: 'tokenhash', playerWorlds: { 12: [12, 1], 38: [38, 1] } });
     }
     if (url === `${PORTAL}/index.php?action=login`) {
+      const worldId = form?.get('world_id') ?? '';
+      if (opts.startPageWorlds?.has(worldId)) {
+        return res(200, [], '<html><form id="loginForm"></form><form id="selectWorld"></form></html>');
+      }
+      if (opts.failWorlds?.has(worldId)) {
+        return res(200, [], '<html><title>Portal</title>World not available</html>');
+      }
+      if (opts.loginBody) {
+        return res(200, [], opts.loginBody);
+      }
       const sid = `sid${++sidN}`;
-      const host = form?.get('world_id') === '38' ? GAME : 'https://en12.the-west.net';
+      const host = worldId === '38' ? GAME : 'https://en12.the-west.net';
       return res(302, [['location', `${host}/game.php?sid=${sid}`]]);
     }
     if (url.startsWith(`${GAME}/game.php?sid=`)) {
@@ -197,4 +214,72 @@ test('wrong password is reported', async () => {
     }),
     (entry: unknown) => entry instanceof AuthError && /Wrong name or password/.test(entry.message),
   );
+});
+
+test('a world that answers with the portal page does not stop the next world', async () => {
+  fakeServers({ failWorlds: new Set(['12']) });
+  const game = await ensureGame({
+    profile,
+    policy: FAST,
+    sessionFile: join(dir, 's.json'),
+    world: { url: GAME, locale: 'en_DK' },
+    credentials: async () => ({ name: 'Tester', password: 'secret' }),
+  });
+  assert.equal(game.bootstrap.h, '0b89b1');
+  assert.deepEqual(
+    calls
+      .filter((candidate) => candidate.url.endsWith('action=login'))
+      .map((candidate) => new URLSearchParams(candidate.body!).get('world_id')),
+    ['12', '38'],
+    'the failed world is tried, then en32',
+  );
+});
+
+test('no world leads to the game: the error says what the portal returned', async () => {
+  fakeServers({ failWorlds: new Set(['12', '38']) });
+  await assert.rejects(
+    ensureGame({
+      profile,
+      policy: FAST,
+      sessionFile: join(dir, 's.json'),
+      world: { url: GAME, locale: 'en_DK' },
+      credentials: async () => ({ name: 'Tester', password: 'secret' }),
+    }),
+    (entry: unknown) =>
+      entry instanceof AuthError &&
+      /Login did not lead to the game \(world 12: HTTP 200 — Portal World not available; world 38: HTTP 200 — Portal World not available\)/.test(
+        entry.message,
+      ),
+  );
+});
+
+test('a portal start page means the login token was not accepted', async () => {
+  fakeServers({ startPageWorlds: new Set(['12', '38']) });
+  await assert.rejects(
+    ensureGame({
+      profile,
+      policy: FAST,
+      sessionFile: join(dir, 's.json'),
+      world: { url: GAME, locale: 'en_DK' },
+      credentials: async () => ({ name: 'Tester', password: 'secret' }),
+    }),
+    (entry: unknown) =>
+      entry instanceof AuthError &&
+      /world 12: HTTP 200 — the portal start page \(login token not accepted\); world 38: HTTP 200 — the portal start page \(login token not accepted\)/.test(
+        entry.message,
+      ),
+  );
+});
+
+test('a relative, JSON-escaped game URL in the login page is followed', async () => {
+  fakeServers({ loginBody: '<script>window.location="\\/game.php?sid=relative";</script>' });
+  const game = await ensureGame({
+    profile,
+    policy: FAST,
+    sessionFile: join(dir, 's.json'),
+    world: { url: GAME, locale: 'en_DK' },
+    credentials: async () => ({ name: 'Tester', password: 'secret' }),
+  });
+  assert.equal(game.bootstrap.h, '0b89b1');
+  assert.ok(calls.some((candidate) => candidate.url === `${GAME}/game.php?sid=relative`));
 });

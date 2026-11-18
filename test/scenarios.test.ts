@@ -330,9 +330,29 @@ test('J7 a job with no place on the map is never planned', () => {
   assert.equal(pick.tasks[0]!.key, 'job:2:long');
 });
 
-test('J8 an excluded job is never planned', () => {
+test('J8 a blacklisted job is never planned', () => {
   const pick = plan({ jobs: [job(1, { long: [1000, 0] }), job(2, { long: [10, 0] })], rules: { excludedJobs: [1] } });
   assert.ok(pick.tasks.every((task) => !task.key.startsWith('job:1:')));
+});
+
+test('J8b a blacklisted job is skipped at its silver/gold location too', () => {
+  const normal = job(1, { long: [1000, 0] });
+  const special = {
+    job: normal,
+    at: point(100),
+    special: 'silver' as const,
+    values: {
+      long: { duration: 3600, energy: 1, experience: 1000, money: 0, luck: 0, items: [] },
+    },
+    valuesMotivation: 1,
+  };
+  const pick = plan({
+    jobs: [normal, job(2, { long: [10, 0] })],
+    specialJobs: [special],
+    maxJobs: 1,
+    rules: { excludedJobs: [1] },
+  });
+  assert.equal(pick.tasks[0]!.key, 'job:2:long');
 });
 
 test("J9 a failing duration is left out; the job's other durations still count", () => {
@@ -575,6 +595,16 @@ test('Farm11 the farm runs with Queue jobs off', () => {
     },
   });
   assert.deepEqual(keys(pick, 1), ['job:1:long']);
+});
+
+test('Farm12 a blacklisted farm job is skipped', () => {
+  const pick = plan({
+    jobs: [job(1, { long: [10, 0, 12, { 100000: 5 }] }), job(2, { long: [10, 0, 12, { 200000: 5 }] })],
+    maxJobs: 1,
+    config: (configValue) => farmConfig(configValue, [1, 2]),
+    rules: { excludedJobs: [1] },
+  });
+  assert.equal(pick.tasks[0]!.key, 'job:2:long');
 });
 
 test('Farm10 the blacksmith preset maps the eight products to their jobs in order', () => {

@@ -112,5 +112,9 @@ the summary. Small gains compound; nobody needs to schedule a cleanup.
 - Farm products are counted, not valued by shop sell price. The blacksmith preset is the eight early blacksmith
   product jobs (`src/game/farm.ts`); the floor is per job, one motivation item per plan (its scope is unverified),
   and below-floor farm jobs are hidden from the normal score for the rest of the plan.
+- The job blacklist is `rules.excludedJobs` (the name is historical). It is the single list for normal jobs,
+  silver/gold variants and farm jobs: none of them are queued while blacklisted, and a blacklisted job does not
+  count as a quest item source. Edit it on `g a` (the `job blacklist` row) or with `d` in the `Q` queue view;
+  `u` there clears it.
 - Seasonal events get a `g e` tab only while one runs: all personal/community rewards including claimed, friends
   who can still receive points, and one bulk action to send to all eligible friends (confirm with `y`).

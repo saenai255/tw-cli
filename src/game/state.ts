@@ -2153,6 +2153,7 @@ export class GameState extends EventEmitter {
     needs: Map<number, BuyNeed>,
     cfg: AutopilotFile['config']['quests'],
   ): QuestPurchase {
+    const excluded = new Set(this.autopilot.rules.excludedJobs);
     const nothingToBuy = (blocker: string | null): QuestPurchase => ({
       needs: [],
       picks: [],
@@ -2167,11 +2168,18 @@ export class GameState extends EventEmitter {
         if (have(requirement.itemId) >= (requirement.count ?? 1)) {
           continue;
         }
-        if (this.requirementSources(requirement).some((xCoord) => isDoable(xCoord.job) && xCoord.at)) {
+        const sources = this.requirementSources(requirement);
+        const usable = sources.some((source) => isDoable(source.job) && source.at && !excluded.has(source.job.id));
+        if (usable) {
           continue;
         }
         if (!cfg.buy) {
-          return nothingToBuy(`${requirement.info}: no doable job drops it`);
+          const blacklistedOnly = sources.some((source) => isDoable(source.job) && source.at);
+          return nothingToBuy(
+            blacklistedOnly
+              ? `${requirement.info}: only blacklisted jobs drop it`
+              : `${requirement.info}: no doable job drops it`,
+          );
         }
         want(requirement.itemId, requirement.count ?? 1, this.itemName(requirement.itemId));
         continue;
@@ -2187,10 +2195,13 @@ export class GameState extends EventEmitter {
       }
       if (requirement.jobId !== undefined) {
         const job = this.jobs.find((jobInfo) => jobInfo.id === requirement.jobId);
-        if (job && isDoable(job)) {
-          continue;
+        if (!job || !isDoable(job)) {
+          return nothingToBuy(`${requirement.info}: job not doable`);
         }
-        return nothingToBuy(`${requirement.info}: job not doable`);
+        if (excluded.has(job.id)) {
+          return nothingToBuy(`${requirement.info}: job is blacklisted`);
+        }
+        continue;
       }
       return nothingToBuy(`${requirement.info}: the autopilot cannot do this`);
     }

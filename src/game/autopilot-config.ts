@@ -156,6 +156,7 @@ export interface PlannedTask {
  * (placed before the first planned step starting at or after it), which stays meaningful as tasks finish.
  */
 export interface AutopilotRules {
+  /** The job blacklist: never queued (normal, silver/gold and farm), and not a quest item source. */
   excludedJobs: number[];
   excludedQuests: number[];
   /** Only these quests count for the Quests goal (empty: all open quests); set by the quest screen's route. */
@@ -199,19 +200,29 @@ export interface DuelRecord {
 
 export const AUTOPILOT_FILE = () => join(CONFIG_DIR, 'autopilot.json');
 
+/** Saved job ids: positive integers, once each, in the saved order. */
+function jobIds(value: unknown): number[] {
+  return [
+    ...new Set(
+      arr(value)
+        .map(Number)
+        .filter((jobId) => Number.isInteger(jobId) && jobId > 0),
+    ),
+  ];
+}
+
 export function parseAutopilotFile(json: unknown): AutopilotFile {
   const raw = obj(json);
   const config = mergeDefaults(DEFAULT_CONFIG, raw.config);
   // The ranking must hold every goal once; drop unknowns, append missing ones.
   const ranked = arr(obj(raw.config).priority).filter((group): group is Goal => GOALS.some((goal) => goal === group));
   config.priority = [...new Set([...ranked, ...GOALS])];
-  // Farm job ids: positive integers, once each, in the saved order. Floor stays a fraction.
-  const farmJobs = arr(obj(obj(raw.config).farm).jobs)
-    .map(Number)
-    .filter((jobId) => Number.isInteger(jobId) && jobId > 0);
-  config.farm.jobs = [...new Set(farmJobs)];
+  // Farm job ids, in the saved order. Floor stays a fraction.
+  config.farm.jobs = jobIds(obj(obj(raw.config).farm).jobs);
   config.farm.floor = Math.max(0, Math.min(1, config.farm.floor));
   const rules = mergeDefaults(EMPTY_RULES, raw.rules);
+  // The queue view's blacklist: same rules as the farm ids, so hand-edited files cannot surprise a replan.
+  rules.excludedJobs = jobIds(obj(raw.rules).excludedJobs);
   const plan =
     isObj(raw.plan) && typeof raw.plan.fingerprint === 'string' && Array.isArray(raw.plan.tasks)
       ? {
